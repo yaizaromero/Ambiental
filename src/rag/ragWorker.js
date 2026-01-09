@@ -93,16 +93,16 @@ self.addEventListener("message", async (event) => {
         return { text: doc.text, score: dot };
       });
 
-      // 3. Ordenar y coger los mejores 3
+      // 3. Ordenar y coger los mejores 2
       scores.sort((a, b) => b.score - a.score);
-      const top3 = scores.slice(0, 3);
-      const context = top3.map(s => s.text).join("\n");
+      const top2 = scores.slice(0, 2);
+      const context = top2.map(s => s.text).join("\n");
 
       console.log("Contexto recuperado:", context); // Para depurar
 
       // 4. GENERACIÓN: Prompt 
       // LaMini-Flan-T5 espera exactamente "Question: ... Context: ..."
-      const prompt = `Question: ${question} Context: ${context}`;
+      const prompt = `Question: ${question} Context: ${context}\n\nAnswer:`;
 
       const genModel = await (generator || pipeline('text2text-generation', 'Xenova/LaMini-Flan-T5-783M'));
 
