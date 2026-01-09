@@ -1,13 +1,10 @@
-// worker.js (Vite/React)
-// Basado en la plantilla: load() + generate() + warmup + mensajes status. :contentReference[oaicite:4]{index=4}
-
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.0";
 
 const WHISPER_SAMPLING_RATE = 16000;
 
 
 let contextBuffer = "";
-const MAX_CONTEXT_CHARS = 300; // suficiente, no más
+const MAX_CONTEXT_CHARS = 300; 
 
 
 let asr = null;
@@ -17,7 +14,6 @@ async function load() {
   try {
     self.postMessage({ status: "loading", data: "Loading model..." });
 
-    // Intenta WebGPU, si falla usa WASM
     const device = ("gpu" in navigator) ? "webgpu" : "wasm";
 
     asr = await pipeline(
@@ -31,7 +27,6 @@ async function load() {
       data: "Warming up model..."
     });
 
-    // Warmup con 5s de audio dummy (igual que la plantilla) :contentReference[oaicite:5]{index=5}
     const dummyAudio = new Float32Array(WHISPER_SAMPLING_RATE * 5);
     await asr(dummyAudio);
 
@@ -62,7 +57,7 @@ async function generate({ audio }) {
 
     const text = out.text?.trim();
 
-    // ✅ AÑADIDO: actualizar buffer de contexto
+    // actualizar buffer de contexto
     if (text) {
       contextBuffer += " " + text;
 
@@ -102,5 +97,4 @@ self.addEventListener("message", async (e) => {
   }
 });
 
-// (Opcional) booted al iniciar
 self.postMessage({ status: "booted" });

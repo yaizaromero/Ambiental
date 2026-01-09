@@ -119,11 +119,11 @@ export default function App() {
         audioBuffer.forEach((b, i) => flat.set(b, i * chunkSize));
         audioBuffer = [];
 
-        // 🔍 calcular energía media (voz vs silencio)
+        // calcular energía media (voz vs silencio)
         const energy =
           flat.reduce((sum, v) => sum + Math.abs(v), 0) / flat.length;
 
-        // 🚫 si es silencio, NO mandamos nada
+        // si es silencio, NO mandamos nada
         if (energy < 0.01) return;
 
         workerRef.current.postMessage({
