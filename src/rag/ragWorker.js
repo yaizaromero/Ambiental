@@ -1,121 +1,126 @@
 // src/rag/ragWorker.js
-// Worker para indexar y consultar texto usando embeddings con @xenova/transformers
-// embeddings + busqueda semántica por similaridad coseno
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.1.0";
-import { chunkText, cosineSimilarity, topK } from "./ragUtils.js";
+import { chunkText } from "./ragUtils.js"; // Asegúrate de importar tu función chunkText si la tienes fuera
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
-// Estado en memoria del worker
-let chunks = [];
-let embeddings = []; // array de Float32Array
-let embedder = null;
-const preferredDevice = "wasm";
-
-
-async function getEmbedder(progress_callback) {
-  if (!embedder) {
-    // Modelo recomendado en enunciado
-    embedder = await pipeline("feature-extraction", "Xenova/paraphrase-MiniLM-L3-v2", {
-      progress_callback,
-      device: preferredDevice
-    });
-  }
-  return embedder;
-}
-
-function meanPoolAndNormalize(output) {
-  // output suele ser: [1, tokens, hidden]
-  const tokenEmbeddings = output[0]; // tokens x hidden
-  const tokens = tokenEmbeddings.length;
-  const dim = tokenEmbeddings[0].length;
-
-  const v = new Float32Array(dim);
-  for (let t = 0; t < tokens; t++) {
-    const row = tokenEmbeddings[t];
-    for (let d = 0; d < dim; d++) v[d] += row[d];
-  }
-  for (let d = 0; d < dim; d++) v[d] /= tokens;
-
-  // normalize
-  let norm = 0;
-  for (let d = 0; d < dim; d++) norm += v[d] * v[d];
-  norm = Math.sqrt(norm) || 1;
-  for (let d = 0; d < dim; d++) v[d] /= norm;
-
-  return v;
-}
-
-async function embedText(text) {
-  const model = await getEmbedder((x) => self.postMessage({ type: "loading", payload: x }));
-
-  const out = await model(text, {
-    pooling: "mean",
-    normalize: true,
-  });
-
-  // out suele ser { data: Float32Array } o Float32Array
-  const vec = out.data ?? out;
-  return vec;
-}
-
-
+let extractor = null;
+let generator = null;
+let db = [];
 
 self.addEventListener("message", async (event) => {
   const { type, payload } = event.data;
 
   try {
+    // ---------------------------------------------------------
+    // INDEXACIÓN
+    // ---------------------------------------------------------
     if (type === "INDEX_TEXT") {
-      self.postMessage({ type: "STATUS", payload: { status: "Preparando chunks..." } });
-      const { text, chunkSize, overlap, maxChunks } = payload;
+      const { text } = payload;
 
-      const allChunks = chunkText(text, { chunkSize, overlap });
-      chunks = typeof maxChunks === "number" ? allChunks.slice(0, maxChunks) : allChunks;
+      // 1. Cargar Extractor
+      if (!extractor) {
+        extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+          progress_callback: (data) => {
+            if (data.status === 'progress' && data.file.includes("onnx")) {
+              const percent = Math.round((data.loaded / data.total) * 100);
+              self.postMessage({
+                type: "download_progress",
+                payload: { percent: percent, model: "all-MiniLM-L6-v2 (Embeddings)" }
+              });
+            }
+          }
+        });
+      }
 
-      embeddings = [];
-      self.postMessage({ type: "STATUS", payload: { status: "Indexando chunks...", total: chunks.length } });
+      // 2. Cargar Generador
+      if (!generator) {
+        generator = await pipeline('text2text-generation', 'Xenova/LaMini-Flan-T5-783M', {
+          progress_callback: (data) => {
+            if (data.status === 'progress' && data.file.includes("onnx")) {
+              const percent = Math.round((data.loaded / data.total) * 100);
+              self.postMessage({
+                type: "download_progress",
+                payload: { percent: percent, model: "LaMini-Flan-T5 (Generador)" }
+              });
+            }
+          }
+        });
+      }
+
+      self.postMessage({ type: "STATUS", payload: "Indexando documento..." });
+
+      // Usamos chunkText importado o definido localmente
+      const chunks = chunkText(text, 150); 
+      db = [];
 
       for (let i = 0; i < chunks.length; i++) {
-        const emb = await embedText(chunks[i]);
-        embeddings.push(emb);
+        const output = await extractor(chunks[i], { pooling: 'mean', normalize: true });
+        db.push({
+          text: chunks[i],
+          embedding: output.data
+        });
+
         if ((i + 1) % 5 === 0 || i === chunks.length - 1) {
-          self.postMessage({ type: "PROGRESS", payload: { done: i + 1, total: chunks.length } });
+          const percent = Math.round(((i + 1) / chunks.length) * 100);
+          self.postMessage({ type: "index_progress", payload: { percent } });
         }
       }
 
-      self.postMessage({ type: "STATUS", payload: { status: "Finalizando indexación..." } });
+      self.postMessage({ type: "INDEX_DONE", payload: { chunksCount: db.length } });
+    }
+
+    // ---------------------------------------------------------
+    // BÚSQUEDA (QUERY) - AQUÍ ESTÁ EL CAMBIO CLAVE
+    // ---------------------------------------------------------
+    if (type === "QUERY") {
+      const { question } = payload;
+      if (!db.length) throw new Error("No hay PDF indexado.");
+
+      self.postMessage({ type: "STATUS", payload: "Pensando respuesta..." });
+
+      // 1. Crear embedding de la pregunta
+      const qOutput = await extractor(question, { pooling: 'mean', normalize: true });
+      const qEmbed = qOutput.data;
+
+      // 2. Comparar con la base de datos (Producto punto / Similitud Coseno)
+      const scores = db.map(doc => {
+        let dot = 0;
+        for (let i = 0; i < doc.embedding.length; i++) {
+          dot += doc.embedding[i] * qEmbed[i];
+        }
+        return { text: doc.text, score: dot };
+      });
+
+      // 3. Ordenar y coger los mejores 3
+      scores.sort((a, b) => b.score - a.score);
+      const top3 = scores.slice(0, 3);
+      const context = top3.map(s => s.text).join("\n");
+
+      console.log("Contexto recuperado:", context); // Para depurar
+
+      // 4. GENERACIÓN: Prompt 
+      // LaMini-Flan-T5 espera exactamente "Question: ... Context: ..."
+      const prompt = `Question: ${question} Context: ${context}`;
+
+      const genModel = await (generator || pipeline('text2text-generation', 'Xenova/LaMini-Flan-T5-783M'));
+
+      const result = await genModel(prompt, {
+        max_new_tokens: 150,
+        temperature: 0.1,
+        repetition_penalty: 1.2,
+        do_sample: false
+      });
 
       self.postMessage({
-        type: "INDEX_DONE",
-        payload: { chunksCount: chunks.length },
+        type: "QUERY_DONE",
+        payload: { answer: result[0].generated_text }
       });
     }
 
-    if (type === "QUERY") {
-      const { question, top_k = 5 } = payload;
-      if (!chunks.length || !embeddings.length) {
-        self.postMessage({ type: "ERROR", payload: "No hay PDF indexado todavía." });
-        return;
-      }
-
-      const qEmb = await embedText(`Pregunta: ${question}. Responde usando el documento.`);
-
-
-      const scored = embeddings.map((emb, idx) => ({
-        idx,
-        score: cosineSimilarity(qEmb, emb),
-      }));
-
-      const best = topK(scored, top_k).map(({ idx, score }) => ({
-        score,
-        chunk: chunks[idx],
-        idx,
-      }));
-
-      self.postMessage({ type: "QUERY_DONE", payload: { best } });
-    }
   } catch (err) {
-    self.postMessage({ type: "ERROR", payload: String(err?.message || err) });
+    console.error(err);
+    self.postMessage({ type: "ERROR", payload: err.message });
   }
 });

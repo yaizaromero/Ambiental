@@ -1,11 +1,8 @@
 // src/rag/pdfText.js
-// Utilidades para extraer texto de PDFs usando pdf.js
-//Leer PDF con pdfjs en el main thread
-
 import * as pdfjsLib from "pdfjs-dist/build/pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min?url";
 
-// IMPORTANTE: configurar worker de pdf.js para Vite
+// Configuración del worker para Vite
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export async function extractTextFromPdfFile(file, { maxPages = 50 } = {}) {
@@ -18,12 +15,15 @@ export async function extractTextFromPdfFile(file, { maxPages = 50 } = {}) {
   for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const content = await page.getTextContent();
-    const pageText = content.items.map((it) => it.str).join(" ");
-    fullText += `\n\n[PAGE ${pageNum}] ${pageText}`;
+    
+    // 1. Une las palabras de la página con espacios.
+    // 2. Añade un espacio al final de la página para que no se pegue con la siguiente.
+    // Sin saltos de línea (\n) ni marcadores de página.
+    fullText += content.items.map((it) => it.str).join(" ") + " ";
   }
 
   return {
-    text: fullText.trim(),
+    text: fullText, // Devolvemos el texto "plano" y continuo
     pagesIndexed: totalPages,
     totalPages: pdf.numPages,
   };

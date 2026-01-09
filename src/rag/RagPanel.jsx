@@ -1,27 +1,17 @@
-// src/rag/RagPanel.jsx
-//UI Drag & Drop para cargar PDF y hacer consultas RAG
 import { useEffect, useRef, useState } from "react";
 import { extractTextFromPdfFile } from "./pdfText.js";
 
 export default function RagPanel() {
   const workerRef = useRef(null);
+  const chatContainerRef = useRef(null);
 
   const [pdfName, setPdfName] = useState("");
-  const [pdfStats, setPdfStats] = useState(null);
-  const [status, setStatus] = useState("Listo");
-  const [progress, setProgress] = useState(null);
- 
-
+  const [status, setStatus] = useState("Esperando PDF...");
+  const [isBusy, setIsBusy] = useState(false);
+  const [progress, setProgress] = useState(0); 
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState("");
-  const [results, setResults] = useState([]);
-  const [isIndexed, setIsIndexed] = useState(false);
-
-
-  // Settings (puedes ajustar)
-  const [chunkSize] = useState(1200);
-  const [overlap] = useState(200);
-  const [topK] = useState(5);
+  const [isReady, setIsReady] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
 
   useEffect(() => {
     workerRef.current = new Worker(new URL("./ragWorker.js", import.meta.url), {
@@ -31,206 +21,231 @@ export default function RagPanel() {
     workerRef.current.onmessage = (e) => {
       const { type, payload } = e.data;
 
-      if (type === "loading") {
-        // Descarga/carga del modelo (primera vez)
-        setStatus(`Cargando modelo embeddings... ${payload?.status || ""} ${payload?.progress ?? ""}`);
-      }
-
       if (type === "STATUS") {
-        setStatus(payload.status);
-        setProgress(null);
+        setStatus(payload);
+        setIsBusy(true);
+      }
+      
+      // CASO 1: Descargando Modelos de Internet
+      if (type === "download_progress") {
+         setStatus(`Descargando modelo: ${payload.model}...`);
+         setProgress(payload.percent);
+         setIsBusy(true);
       }
 
-      if (type === "PROGRESS") {
-        setProgress(payload);
-        setStatus(`Indexando... ${payload.done}/${payload.total}`);
+      // CASO 2: Procesando el PDF localmente
+      if (type === "index_progress") {
+         setStatus(`Analizando contenido del PDF...`);
+         setProgress(payload.percent);
       }
 
       if (type === "INDEX_DONE") {
-        setIsIndexed(true);
-        setStatus(`✅ PDF indexado (${payload.chunksCount} chunks)`);
-        setProgress(null);
-        
+        setStatus(`✅ Listo. PDF indexado (${payload.chunksCount} fragmentos).`);
+        setProgress(100); 
+        setTimeout(() => setProgress(0), 1000); 
+        setIsReady(true);
+        setIsBusy(false);
       }
-
       if (type === "QUERY_DONE") {
-        if (!payload.best?.length) {
-            setResults([]);
-            setAnswer("");
-            setStatus("⚠️ No encontré texto relevante en el PDF para esa pregunta.");
-            return;
-        }
-
-        setResults(payload.best);
-        const topText = payload.best.slice(0,2).map(x => x.chunk).join("\n\n");
-        setAnswer(simpleAnswerFromChunks(question, topText));
-        setStatus("✅ Consulta completada");
-        }
-
-
-
+        setChatHistory((prev) => [
+          ...prev,
+          { type: "bot", text: payload.answer },
+        ]);
+        setStatus("✅ Esperando pregunta...");
+        setIsBusy(false);
+      }
       if (type === "ERROR") {
-        setStatus(`❌ Error: ${payload}`);
+        setStatus("❌ Error: " + payload);
+        setIsBusy(false);
+        setProgress(0);
       }
     };
 
     return () => workerRef.current?.terminate();
   }, []);
 
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [chatHistory]);
+
   async function handleFile(file) {
     if (!file) return;
-    setIsIndexed(false);
-    setResults([]);
-    setAnswer("");
     setPdfName(file.name);
-    setStatus("Leyendo PDF...");
+    setIsReady(false);
+    setChatHistory([]); 
+    setStatus("Iniciando...");
+    setProgress(0);
+    setIsBusy(true);
 
-    const { text, pagesIndexed, totalPages } = await extractTextFromPdfFile(file, { maxPages: 50 });
-    setPdfStats({ pagesIndexed, totalPages, chars: text.length });
-
-    setStatus("Indexando (esto puede tardar la primera vez)...");
-    setStatus("Enviando a indexación...");
-    workerRef.current.postMessage({
-      type: "INDEX_TEXT",
-      payload: {
-        text,
-        chunkSize,
-        overlap,
-        maxChunks: 80, // limit para que no se muera (ajusta si queréis)
-      },
-    });
+    try {
+      const { text } = await extractTextFromPdfFile(file, { maxPages: 50 });
+      workerRef.current.postMessage({
+        type: "INDEX_TEXT",
+        payload: { text },
+      });
+    } catch (error) {
+      setStatus("Error leyendo PDF: " + error.message);
+      setIsBusy(false);
+    }
   }
 
   function onDrop(e) {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (file && file.type === "application/pdf") handleFile(file);
-    else setStatus("❌ Arrastra un PDF válido");
-  }
-
-  function onDragOver(e) {
-    e.preventDefault();
   }
 
   function ask() {
-    if (!isIndexed) {
-        setStatus("❌ Error: No hay PDF indexado todavía.");
-        return;
-    }
-
-    if (!question.trim()) {
-        return;
-    }
-
-    setStatus("Buscando en el PDF...");
-    setResults([]);
-
+    if (!question.trim() || !isReady || isBusy) return;
+    setChatHistory((prev) => [...prev, { type: "user", text: question }]);
+    setStatus("🧠 Pensando respuesta...");
+    setIsBusy(true);
     workerRef.current.postMessage({
-        type: "QUERY",
-        payload: {
-        question,
-        top_k: topK,
-        },
+      type: "QUERY",
+      payload: { question },
     });
+    setQuestion("");
   }
 
-  function simpleAnswerFromChunks(q, ctx) {
-    const cleaned = (ctx || "")
-        .replace(/-\s+/g, "")      // por si quedara algún "eviden- cia"
-        .replace(/\s+/g, " ")
-        .trim();
-
-    // Divide en frases “razonables”
-    const sentences = cleaned.split(/(?<=[.!?])\s+/);
-
-    let out = "";
-    for (const s of sentences) {
-        if (!s) continue;
-        if ((out + " " + s).trim().length > 420) break;
-        out = (out + " " + s).trim();
-        if (sentences.indexOf(s) >= 2) break; // máximo ~3 frases
-    }
-
-    // fallback
-    if (!out) out = cleaned.slice(0, 420);
-
-    return out + (out.length < cleaned.length ? "…" : "");
-}
-
+  const styles = {
+    container: {
+      background: "#1e1e1e",
+      color: "#e0e0e0",
+      padding: "20px",
+      borderRadius: "12px",
+      boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+      fontFamily: "'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+      maxWidth: "800px",
+      margin: "20px auto",
+      border: "1px solid #333",
+    },
+    header: {
+      margin: "0 0 20px 0",
+      fontSize: "1.5rem",
+      fontWeight: "600",
+      color: "#fff",
+      borderBottom: "1px solid #333",
+      paddingBottom: "10px",
+    },
+    dropZone: {
+      border: "2px dashed #444",
+      borderRadius: "8px",
+      padding: "20px",
+      textAlign: "center",
+      cursor: "pointer",
+      background: "#252526",
+      transition: "background 0.2s",
+      marginBottom: "15px",
+    },
+    statusBar: {
+      fontSize: "0.9rem",
+      color: isBusy ? "#4caf50" : "#aaa",
+      marginBottom: "5px",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      height: "20px",
+    },
+    progressContainer: {
+        width: "100%",
+        height: "6px",
+        background: "#333",
+        borderRadius: "3px",
+        marginBottom: "15px",
+        overflow: "hidden",
+        display: progress > 0 ? "block" : "none"
+    },
+    progressFill: {
+        height: "100%",
+        width: `${progress}%`,
+        background: "#4caf50",
+        transition: "width 0.2s ease-in-out" // Transición más rápida para descargas
+    },
+    chatWindow: {
+      height: "350px",
+      overflowY: "auto",
+      background: "#252526",
+      borderRadius: "8px",
+      padding: "15px",
+      border: "1px solid #333",
+      marginBottom: "15px",
+      display: chatHistory.length === 0 ? "none" : "block",
+    },
+    inputGroup: { display: "flex", gap: "10px" },
+    input: {
+      flex: 1,
+      padding: "12px",
+      borderRadius: "6px",
+      border: "1px solid #444",
+      background: "#333",
+      color: "white",
+      fontSize: "1rem",
+      outline: "none",
+    },
+    button: {
+      padding: "10px 25px",
+      background: isReady ? "#007acc" : "#444",
+      color: "white",
+      border: "none",
+      borderRadius: "6px",
+      fontWeight: "bold",
+      cursor: isReady ? "pointer" : "not-allowed",
+    },
+    msgRow: { marginBottom: "12px", lineHeight: "1.5", fontSize: "0.95rem" },
+    userLabel: { color: "#4fc1ff", fontWeight: "bold", marginRight: "8px" },
+    botLabel: { color: "#4ec9b0", fontWeight: "bold", marginRight: "8px" }
+  };
 
   return (
-    <div style={{ marginTop: 30, padding: 16, border: "1px solid #444", borderRadius: 12 }}>
-      <h2 style={{ marginTop: 0 }}>📄 RAG Local (PDF)</h2>
+    <div style={styles.container}>
+      <h3 style={styles.header}>RAG</h3>
 
       <div
         onDrop={onDrop}
-        onDragOver={onDragOver}
-        style={{
-          padding: 16,
-          border: "2px dashed #777",
-          borderRadius: 12,
-          marginBottom: 12,
-        }}
+        onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.background = "#333"; }}
+        onDragLeave={(e) => { e.currentTarget.style.background = "#252526"; }}
+        style={styles.dropZone}
       >
-        <strong>Drag & Drop PDF aquí</strong>
-        <div style={{ opacity: 0.85, marginTop: 6 }}>
-          {pdfName ? `PDF: ${pdfName}` : "Aún no has cargado ningún PDF"}
-        </div>
-        {pdfStats && (
-          <div style={{ opacity: 0.85, marginTop: 6 }}>
-            Páginas indexadas: {pdfStats.pagesIndexed}/{pdfStats.totalPages} · Texto: {pdfStats.chars} chars
-          </div>
-        )}
+        <div style={{ fontSize: "1.2rem", marginBottom: "5px" }}>{pdfName ? "📄" : "📂"}</div>
+        <div>{pdfName ? <span style={{color:"#fff", fontWeight:"bold"}}>{pdfName}</span> : "Arrastra tu PDF aquí"}</div>
       </div>
 
-      <div style={{ marginBottom: 10 }}>
-        <strong>Estado:</strong> {status}
-        {progress && (
-          <div style={{ marginTop: 6, opacity: 0.85 }}>
-            Progreso: {progress.done}/{progress.total}
-          </div>
-        )}
+      <div style={styles.statusBar}>
+        <span>{isBusy && <span className="loader" style={{marginRight:8}}>⚡</span>} {status}</span>
+        {progress > 0 && <span style={{fontSize:"0.8em", color:"#888"}}>{progress}%</span>}
+      </div>
+      
+      <div style={styles.progressContainer}>
+          <div style={styles.progressFill}></div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div ref={chatContainerRef} style={styles.chatWindow}>
+        {chatHistory.map((msg, index) => (
+          <div key={index} style={styles.msgRow}>
+            {msg.type === "user" ? (
+                <> <span style={styles.userLabel}>You:</span> <span>{msg.text}</span> </>
+            ) : (
+                <> <span style={styles.botLabel}>AI:</span> <span>{msg.text}</span> </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={styles.inputGroup}>
         <input
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Pregunta sobre el PDF (ej: ¿Cuál fue el presupuesto del año pasado?)"
-          style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #666" }}
+          onKeyDown={(e) => e.key === "Enter" && ask()}
+          placeholder={isReady ? "Ask a question in English..." : "Esperando PDF..."}
+          style={styles.input}
+          disabled={!isReady || isBusy}
         />
-        <button onClick={ask} disabled={!question || !isIndexed}>
+        <button onClick={ask} disabled={!isReady || isBusy} style={styles.button}>
           Preguntar
         </button>
       </div>
-      {answer && (
-        <div style={{ marginTop: 16, textAlign: "left", padding: 12, border: "1px solid #555", borderRadius: 10 }}>
-          <h3 style={{ marginTop: 0 }}>🧾 Respuesta (basada en el PDF)</h3>
-          <div>{answer}</div>
-        </div>
-      )}
-
-      {results?.length > 0 && (
-        <div style={{ marginTop: 16, textAlign: "left" }}>
-          <h3>🔎 Top chunks relevantes</h3>
-          {results.map((r, i) => (
-            <div
-              key={i}
-              style={{
-                padding: 10,
-                border: "1px solid #555",
-                borderRadius: 10,
-                marginBottom: 10,
-              }}
-            >
-              <div style={{ opacity: 0.9 }}>
-                <strong>Score:</strong> {r.score.toFixed(4)} · <strong>Chunk #{r.idx}</strong>
-              </div>
-              <div style={{ marginTop: 6, opacity: 0.95 }}>{r.chunk}</div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
