@@ -1,51 +1,88 @@
-import { pipeline, env } from '@xenova/transformers';
+// worker.js (Vite/React)
+// Basado en la plantilla: load() + generate() + warmup + mensajes status. :contentReference[oaicite:4]{index=4}
 
-// Configuración obligatoria: Desactivar carga de modelos locales del sistema de archivos
-// (los descargará de internet la primera vez y los guardará en caché del navegador)
-env.allowLocalModels = false;
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.0";
 
-// Usamos el patrón Singleton para cargar el modelo solo una vez
-class OrquestadorPipeline {
-    static task = 'zero-shot-classification';
-    // Modelo ligero y rápido recomendado para pruebas iniciales
-    static model = 'Xenova/mobilebert-uncased-mnli'; 
-    static instance = null;
+const WHISPER_SAMPLING_RATE = 16000;
 
-    static async getInstance(progress_callback = null) {
-        if (this.instance === null) {
-            this.instance = await pipeline(this.task, this.model, { progress_callback });
-        }
-        return this.instance;
-    }
+let asr = null;
+let processing = false;
+
+async function load() {
+  try {
+    self.postMessage({ status: "loading", data: "Loading model..." });
+
+    // Intenta WebGPU, si falla usa WASM
+    const device = ("gpu" in navigator) ? "webgpu" : "wasm";
+
+    asr = await pipeline(
+      "automatic-speech-recognition",
+      "onnx-community/whisper-small",
+      { device }
+    );
+
+    self.postMessage({
+      status: "loading",
+      data: "Warming up model..."
+    });
+
+    // Warmup con 5s de audio dummy (igual que la plantilla) :contentReference[oaicite:5]{index=5}
+    const dummyAudio = new Float32Array(WHISPER_SAMPLING_RATE * 5);
+    await asr(dummyAudio, {
+        generate_kwargs: {
+            language: "es",
+            task: "transcribe",
+        },
+        });
+
+
+    self.postMessage({ status: "ready" });
+  } catch (err) {
+    self.postMessage({ status: "error", data: String(err?.stack || err) });
+  }
 }
 
-// Escuchar mensajes desde la interfaz (App.jsx)
-self.addEventListener('message', async (event) => {
-    // Extraemos el texto que nos manda la App
-    const { text } = event.data;
+async function generate({ audio, language }) {
+  if (!asr) {
+    self.postMessage({ status: "error", data: "ASR not loaded yet" });
+    return;
+  }
+  if (processing) return;
+  processing = true;
 
-    // 1. Cargamos el modelo (si es la primera vez, tardará un poco)
-    let classifier = await OrquestadorPipeline.getInstance(x => {
-        // Enviamos el progreso de carga a la App (ej: "Cargando 50%...")
-        self.postMessage({ status: 'loading', output: x });
-    });
+  try {
+    self.postMessage({ status: "start" });
 
-    // 2. Definimos las etiquetas de los "Seis Sombreros" [cite: 29]
-    // Estas etiquetas ayudan a la IA a entender la intención
-    const candidate_labels = [
-        "critica negativa riesgo problema", // Sombrero Negro
-        "idea creativa nueva alternativa",  // Sombrero Verde
-        "dato objetivo hecho numerico",     // Sombrero Blanco
-        "emocion sentimiento intuicion",    // Sombrero Rojo
-        "beneficio ventaja positivo"        // Sombrero Amarillo
-    ];
+    const out = await asr(audio, {
+        generate_kwargs: {
+            language: "es",
+            task: "transcribe",
+        },
+        });
 
-    // 3. Ejecutamos la clasificación
-    let output = await classifier(text, candidate_labels);
 
-    // 4. Enviamos la respuesta de vuelta
     self.postMessage({
-        status: 'complete',
-        result: output
+      status: "complete",
+      output: out.text,
     });
+  } catch (err) {
+    self.postMessage({ status: "error", data: String(err?.stack || err) });
+  } finally {
+    processing = false;
+  }
+}
+
+self.addEventListener("message", async (e) => {
+  const { type, data } = e.data || {};
+  switch (type) {
+    case "load":
+      await load();
+      break;
+    case "generate":
+      await generate(data);
+      break;
+  }
 });
+
+// (Opcional) booted al iniciar
+self.postMessage({ status: "booted" });

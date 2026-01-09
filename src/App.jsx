@@ -1,70 +1,157 @@
-import { useEffect, useState, useRef } from 'react';
-import './App.css';
+import { useEffect, useRef, useState } from "react";
+import "./index.css";
 
-function App() {
-  // Estado para guardar lo que escribe el usuario y la respuesta de la IA
-  const [inputText, setInputText] = useState('');
-  const [result, setResult] = useState(null);
-  const [status, setStatus] = useState('Listo');
-  
-  // Referencia al Worker (nuestro cerebro en segundo plano)
-  const worker = useRef(null);
+export default function App() {
+  const workerRef = useRef(null);
 
-  // Al iniciar la web, creamos el worker
+  const audioContextRef = useRef(null);
+  const processorRef = useRef(null);
+  const streamRef = useRef(null);
+
+  const [status, setStatus] = useState("booting");
+  const [progress, setProgress] = useState(0);
+  const [transcript, setTranscript] = useState("");
+
   useEffect(() => {
-    worker.current = new Worker(new URL('./worker.js', import.meta.url), {
-      type: 'module'
+    if (workerRef.current) return;
+
+    const w = new Worker(new URL("./worker.js", import.meta.url), {
+      type: "module",
     });
 
-    // Qué hacer cuando el worker nos responde
-    worker.current.onmessage = (e) => {
-      const { status, output, result } = e.data;
-      
-      if (status === 'loading') {
-        // Mostrar barra de progreso si está descargando el modelo
-        setStatus(`Cargando modelo... ${output.status} ${output.progress || ''}%`);
-      } else if (status === 'complete') {
-        setStatus('Análisis completado');
-        setResult(result); // Guardamos el resultado para mostrarlo
+    workerRef.current = w;
+
+    w.onmessage = (e) => {
+      const msg = e.data;
+
+      if (msg.status === "booted") setStatus("booting");
+
+      if (msg.status === "loading") {
+        setStatus("loading");
+        if (typeof msg.data?.progress === "number") {
+          setProgress(Math.round(msg.data.progress * 100));
+        }
+      }
+
+      if (msg.status === "ready") {
+        setStatus("ready");
+        setProgress(100);
+      }
+
+      if (msg.status === "complete") {
+        setTranscript((t) => t + " " + msg.output);
+      }
+
+      if (msg.status === "error") {
+        setStatus("error");
+        console.error(msg.data);
       }
     };
 
-    return () => worker.current.terminate();
+    w.postMessage({ type: "load" });
   }, []);
 
-  const clasificarTexto = () => {
-    setStatus('Analizando...');
-    // Enviamos el texto al worker
-    worker.current.postMessage({ text: inputText });
-  };
+  async function startRecording() {
+    if (!workerRef.current) return;
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+
+    const audioContext = new AudioContext({ sampleRate: 16000 });
+    audioContextRef.current = audioContext;
+
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    processorRef.current = processor;
+
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+
+    let audioBuffer = [];
+
+    processor.onaudioprocess = (e) => {
+      audioBuffer.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+
+      // ~2 segundos de audio
+      if (audioBuffer.length >= 16) {
+        const chunkSize = audioBuffer[0].length;
+        const flat = new Float32Array(audioBuffer.length * chunkSize);
+
+        audioBuffer.forEach((b, i) => flat.set(b, i * chunkSize));
+        audioBuffer = [];
+
+        // 🔍 calcular energía media (voz vs silencio)
+        const energy =
+          flat.reduce((sum, v) => sum + Math.abs(v), 0) / flat.length;
+
+        // 🚫 si es silencio, NO mandamos nada
+        if (energy < 0.01) return;
+
+        workerRef.current.postMessage({
+          type: "generate",
+          data: { audio: flat },
+        });
+
+      }
+    };
+
+    setStatus("recording");
+  }
+
+  function stopRecording() {
+    processorRef.current?.disconnect();
+    audioContextRef.current?.close();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+
+    processorRef.current = null;
+    audioContextRef.current = null;
+    streamRef.current = null;
+
+    setStatus("ready");
+  }
 
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-      <h1>🧠 Orquestador de Sombreros (Prueba)</h1>
-      
-      <textarea 
-        rows="4" 
-        cols="50"
-        placeholder="Escribe una frase (ej: 'Eso es demasiado arriesgado y costará mucho dinero')"
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-      />
-      <br />
-      <button onClick={clasificarTexto} disabled={status === 'Analizando...'}>
-        Analizar Intención
-      </button>
+    <div className="app">
+      <h1>🧠 Brainstorming Privado</h1>
 
-      <p><strong>Estado:</strong> {status}</p>
+      <StatusBadge status={status} />
 
-      {result && (
-        <div style={{ border: '1px solid #ccc', padding: '10px', marginTop: '10px' }}>
-          <h3>Resultado:</h3>
-          <p>La IA cree que esto es: <strong>{result.labels[0]}</strong></p>
-          <p>(Confianza: {(result.scores[0] * 100).toFixed(2)}%)</p>
-        </div>
-      )}
+      {status === "loading" && <ProgressBar value={progress} />}
+
+      <div className="controls">
+        <button onClick={startRecording} disabled={status !== "ready"}>
+          ▶ Start
+        </button>
+        <button onClick={stopRecording} disabled={status !== "recording"}>
+          ⏹ Stop
+        </button>
+      </div>
+
+      <div className="transcript">
+        <h3>📝 Transcripción</h3>
+        <p>{transcript || "Esperando audio..."}</p>
+      </div>
     </div>
   );
 }
 
-export default App;
+function StatusBadge({ status }) {
+  const labels = {
+    booting: "Iniciando sistema",
+    loading: "Cargando modelo",
+    ready: "Listo",
+    recording: "Grabando",
+    error: "Error",
+  };
+
+  return <div className={`status ${status}`}>{labels[status] || status}</div>;
+}
+
+function ProgressBar({ value }) {
+  return (
+    <div className="progress">
+      <div className="progress-bar" style={{ width: `${value}%` }} />
+      <span>{value}%</span>
+    </div>
+  );
+}

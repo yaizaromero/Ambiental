@@ -7,7 +7,10 @@ export default defineConfig({
     format: 'es',
   },
   optimizeDeps: {
-    // AQUI ESTÁ LA CLAVE: Añadimos 'onnxruntime-web' para que no lo rompa
     exclude: ['@xenova/transformers', 'onnxruntime-web'],
+  },
+  // AÑADE ESTO (Solución recomendada en tu investigación):
+  define: {
+    global: 'globalThis',
   },
 })
