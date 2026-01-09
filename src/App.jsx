@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import './App.css';
+import RagPanel from './rag/RagPanel.jsx';
+
 
 function App() {
   // Estado para guardar lo que escribe el usuario y la respuesta de la IA
@@ -63,6 +65,8 @@ function App() {
           <p>(Confianza: {(result.scores[0] * 100).toFixed(2)}%)</p>
         </div>
       )}
+      <hr style={{ margin: '30px 0' }} />
+      <RagPanel />
     </div>
   );
 }

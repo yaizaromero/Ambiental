@@ -4,10 +4,13 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   worker: {
-    format: 'es',
+    format: 'es', // Obligatorio para que funcionen los workers como módulos
+  },
+  build: {
+    target: 'esnext' // <--- AÑADE ESTO: Evita errores al construir la versión final
   },
   optimizeDeps: {
-    // AQUI ESTÁ LA CLAVE: Añadimos 'onnxruntime-web' para que no lo rompa
-    exclude: ['@xenova/transformers', 'onnxruntime-web'],
+    // Actualizamos el nombre por si acaso tienes instalada la librería local
+    exclude: ['@huggingface/transformers', '@xenova/transformers'], 
   },
 })

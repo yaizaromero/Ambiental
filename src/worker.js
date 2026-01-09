@@ -1,13 +1,16 @@
-import { pipeline, env } from '@xenova/transformers';
+// src/worker.js
+// Worker para la clasificación de texto (Intención de usuario / Sombreros)
 
-// Configuración obligatoria: Desactivar carga de modelos locales del sistema de archivos
-// (los descargará de internet la primera vez y los guardará en caché del navegador)
+// 1. CAMBIO IMPORTANTE: Usamos la CDN para que no busque en node_modules
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.1.0';
+
+// Configuración: No buscar modelos en disco local, usar caché del navegador
 env.allowLocalModels = false;
+env.useBrowserCache = true;
 
-// Usamos el patrón Singleton para cargar el modelo solo una vez
+// Singleton del modelo
 class OrquestadorPipeline {
     static task = 'zero-shot-classification';
-    // Modelo ligero y rápido recomendado para pruebas iniciales
     static model = 'Xenova/mobilebert-uncased-mnli'; 
     static instance = null;
 
@@ -19,33 +22,46 @@ class OrquestadorPipeline {
     }
 }
 
-// Escuchar mensajes desde la interfaz (App.jsx)
 self.addEventListener('message', async (event) => {
-    // Extraemos el texto que nos manda la App
-    const { text } = event.data;
+  const { text } = event.data;
+  if (!text) return;
 
-    // 1. Cargamos el modelo (si es la primera vez, tardará un poco)
-    let classifier = await OrquestadorPipeline.getInstance(x => {
-        // Enviamos el progreso de carga a la App (ej: "Cargando 50%...")
-        self.postMessage({ status: 'loading', output: x });
+  try {
+    // 1. Notificar carga
+    let classifier = await OrquestadorPipeline.getInstance((data) => {
+      if (data.status === 'progress') {
+        self.postMessage({ 
+          status: 'loading', 
+          output: { status: 'Cargando clasificador', progress: data.progress } 
+        });
+      }
     });
 
-    // 2. Definimos las etiquetas de los "Seis Sombreros" [cite: 29]
-    // Estas etiquetas ayudan a la IA a entender la intención
+    // 2. Definir las etiquetas (Intenciones)
+    // Las ponemos en inglés porque este modelo entiende mejor el inglés, 
+    // aunque clasifica texto en español perfectamente.
     const candidate_labels = [
-        "critica negativa riesgo problema", // Sombrero Negro
-        "idea creativa nueva alternativa",  // Sombrero Verde
-        "dato objetivo hecho numerico",     // Sombrero Blanco
-        "emocion sentimiento intuicion",    // Sombrero Rojo
-        "beneficio ventaja positivo"        // Sombrero Amarillo
+      "critical risk problem",          // Sombrero Negro
+      "creative idea new alternative",  // Sombrero Verde
+      "objective fact data number",     // Sombrero Blanco
+      "emotion feeling intuition",      // Sombrero Rojo
+      "positive benefit advantage",     // Sombrero Amarillo
+      "process summary organization"    // Sombrero Azul
     ];
 
-    // 3. Ejecutamos la clasificación
-    let output = await classifier(text, candidate_labels);
+    // 3. Ejecutar clasificación
+    const output = await classifier(text, candidate_labels);
 
-    // 4. Enviamos la respuesta de vuelta
+    // 4. Devolver resultado
     self.postMessage({
-        status: 'complete',
-        result: output
+      status: 'complete',
+      result: output
     });
+
+  } catch (err) {
+    self.postMessage({
+      status: 'error',
+      output: err.message
+    });
+  }
 });
