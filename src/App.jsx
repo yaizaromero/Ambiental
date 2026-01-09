@@ -2,30 +2,39 @@ import { useEffect, useState, useRef } from 'react';
 import './App.css';
 
 function App() {
-  // Estado para guardar lo que escribe el usuario y la respuesta de la IA
   const [inputText, setInputText] = useState('');
   const [result, setResult] = useState(null);
-  const [status, setStatus] = useState('Listo');
-  
-  // Referencia al Worker (nuestro cerebro en segundo plano)
+  const [generatedResponse, setGeneratedResponse] = useState('');
+  const [status, setStatus] = useState('Ready');
+
+  const AGENTES = {
+    "White Agent": { nombre: "White Agent", desc: "Data Processor", color: "#f8f9fa", texto: "#212529", icon: "⚪" },
+    "Red Agent": { nombre: "Red Agent", desc: "Sentiment Analyst", color: "#ffebee", texto: "#c62828", icon: "🔴" },
+    "Black Agent": { nombre: "Black Agent", desc: "Risk Evaluator", color: "#212121", texto: "#ffffff", icon: "⚫" },
+    "Yellow Agent": { nombre: "Yellow Agent", desc: "Value Seeker", color: "#fff9c4", texto: "#fbc02d", icon: "🟡" },
+    "Green Agent": { nombre: "Green Agent", desc: "Creative Generator", color: "#e8f5e9", texto: "#2e7d32", icon: "🟢" },
+    "Blue Agent": { nombre: "Blue Agent", desc: "Process Facilitator", color: "#e3f2fd", texto: "#1565c0", icon: "🔵" }
+  };
+
   const worker = useRef(null);
 
-  // Al iniciar la web, creamos el worker
   useEffect(() => {
     worker.current = new Worker(new URL('./worker.js', import.meta.url), {
       type: 'module'
     });
 
-    // Qué hacer cuando el worker nos responde
     worker.current.onmessage = (e) => {
-      const { status, output, result } = e.data;
+      const { status, output, result, generatedText } = e.data;
       
       if (status === 'loading') {
-        // Mostrar barra de progreso si está descargando el modelo
-        setStatus(`Cargando modelo... ${output.status} ${output.progress || ''}%`);
+        setStatus(`${output.status} ${output.progress ? Math.round(output.progress) + '%' : ''}`);
       } else if (status === 'complete') {
-        setStatus('Análisis completado');
-        setResult(result); // Guardamos el resultado para mostrarlo
+        setStatus('Analysis complete');
+        setResult(result);
+        setGeneratedResponse(generatedText);
+      } else if (status === 'error') {
+        setStatus('Worker Error');
+        console.error(output);
       }
     };
 
@@ -33,34 +42,97 @@ function App() {
   }, []);
 
   const clasificarTexto = () => {
-    setStatus('Analizando...');
-    // Enviamos el texto al worker
+    if(!inputText.trim()) return;
+    setStatus('Orchestrating...');
+    setResult(null);
+    setGeneratedResponse('');
     worker.current.postMessage({ text: inputText });
   };
 
+  const currentAgent = result ? AGENTES[result.labels[0]] : null;
+
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial' }}>
-      <h1>🧠 Orquestador de Sombreros (Prueba)</h1>
+    <div style={{ maxWidth: '800px', margin: '0 auto', padding: '20px', fontFamily: 'system-ui, sans-serif' }}>
+      <header style={{ textAlign: 'center', marginBottom: '40px' }}>
+        <h1>🧠 Hat Orchestrator</h1>
+        <p style={{ color: '#666' }}>Local multi-agent system in browser</p>
+      </header>
       
-      <textarea 
-        rows="4" 
-        cols="50"
-        placeholder="Escribe una frase (ej: 'Eso es demasiado arriesgado y costará mucho dinero')"
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-      />
-      <br />
-      <button onClick={clasificarTexto} disabled={status === 'Analizando...'}>
-        Analizar Intención
-      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+        <textarea 
+          rows="4" 
+          placeholder="Enter an idea or statement (e.g., 'Launching without testing is risky')"
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          style={{ padding: '15px', borderRadius: '8px', border: '1px solid #ccc', fontSize: '16px', width: '100%', boxSizing: 'border-box' }}
+        />
+        
+        <button 
+          onClick={clasificarTexto} 
+          disabled={status.includes('Loading') || status === 'Orchestrating...'}
+          style={{ 
+            padding: '12px', 
+            backgroundColor: '#333', 
+            color: 'white', 
+            border: 'none', 
+            borderRadius: '8px', 
+            cursor: 'pointer',
+            fontSize: '16px',
+            opacity: (status.includes('Loading')) ? 0.7 : 1
+          }}
+        >
+          {status.includes('Loading') ? 'Loading AI Models...' : 'Analyze & Invoke Agent'}
+        </button>
+      </div>
 
-      <p><strong>Estado:</strong> {status}</p>
+      <p style={{ textAlign: 'center', fontSize: '14px', color: '#888', marginTop: '10px' }}>
+        <strong>System Status:</strong> {status}
+      </p>
 
-      {result && (
-        <div style={{ border: '1px solid #ccc', padding: '10px', marginTop: '10px' }}>
-          <h3>Resultado:</h3>
-          <p>La IA cree que esto es: <strong>{result.labels[0]}</strong></p>
-          <p>(Confianza: {(result.scores[0] * 100).toFixed(2)}%)</p>
+      {currentAgent && (
+        <div className="agent-card" style={{ 
+          marginTop: '30px', 
+          border: `2px solid ${currentAgent.color}`,
+          borderRadius: '15px',
+          overflow: 'hidden',
+          boxShadow: '0 4px 15px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{ 
+            backgroundColor: currentAgent.color, 
+            color: currentAgent.texto, 
+            padding: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '15px'
+          }}>
+            <span style={{ fontSize: '40px' }}>{currentAgent.icon}</span>
+            <div>
+              <h2 style={{ margin: 0 }}>{currentAgent.nombre}</h2>
+              <span style={{ opacity: 0.8 }}>{currentAgent.desc}</span>
+            </div>
+            <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+               <small>Confidence</small><br/>
+               <strong>{(result.scores[0] * 100).toFixed(1)}%</strong>
+            </div>
+          </div>
+
+          <div style={{ padding: '25px', backgroundColor: '#fff' }}>
+            <h3 style={{ marginTop: 0, color: '#555' }}>Agent Response:</h3>
+            {generatedResponse ? (
+              <div style={{ 
+                fontSize: '18px', 
+                lineHeight: '1.6', 
+                color: '#333', 
+                whiteSpace: 'pre-wrap',
+                borderLeft: `4px solid ${currentAgent.color === '#212121' ? '#999' : currentAgent.color}`,
+                paddingLeft: '15px'
+              }}>
+                {generatedResponse}
+              </div>
+            ) : (
+              <p><em>Generating response...</em></p>
+            )}
+          </div>
         </div>
       )}
     </div>

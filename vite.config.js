@@ -7,7 +7,10 @@ export default defineConfig({
     format: 'es',
   },
   optimizeDeps: {
-    // AQUI ESTÁ LA CLAVE: Añadimos 'onnxruntime-web' para que no lo rompa
-    exclude: ['@xenova/transformers', 'onnxruntime-web'],
+    // Excluimos ambas versiones por seguridad y el motor ONNX
+    exclude: ['@xenova/transformers', '@huggingface/transformers', 'onnxruntime-web'],
   },
+  build: {
+    target: 'esnext' // Permite características modernas de JS que la IA necesita
+  }
 })
