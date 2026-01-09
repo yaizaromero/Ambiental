@@ -5,6 +5,11 @@ import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers
 
 const WHISPER_SAMPLING_RATE = 16000;
 
+
+let contextBuffer = "";
+const MAX_CONTEXT_CHARS = 300; // suficiente, no más
+
+
 let asr = null;
 let processing = false;
 
@@ -28,12 +33,8 @@ async function load() {
 
     // Warmup con 5s de audio dummy (igual que la plantilla) :contentReference[oaicite:5]{index=5}
     const dummyAudio = new Float32Array(WHISPER_SAMPLING_RATE * 5);
-    await asr(dummyAudio, {
-        generate_kwargs: {
-            language: "es",
-            task: "transcribe",
-        },
-        });
+    await asr(dummyAudio);
+
 
 
     self.postMessage({ status: "ready" });
@@ -42,7 +43,7 @@ async function load() {
   }
 }
 
-async function generate({ audio, language }) {
+async function generate({ audio }) {
   if (!asr) {
     self.postMessage({ status: "error", data: "ASR not loaded yet" });
     return;
@@ -54,16 +55,32 @@ async function generate({ audio, language }) {
     self.postMessage({ status: "start" });
 
     const out = await asr(audio, {
-        generate_kwargs: {
-            language: "es",
-            task: "transcribe",
-        },
+      generate_kwargs: {
+        prompt: contextBuffer,
+      },
+    });
+
+    const text = out.text?.trim();
+
+    // ✅ AÑADIDO: actualizar buffer de contexto
+    if (text) {
+      contextBuffer += " " + text;
+
+      // limitar tamaño del contexto
+      if (contextBuffer.length > MAX_CONTEXT_CHARS) {
+        contextBuffer = contextBuffer.slice(-MAX_CONTEXT_CHARS);
+      }
+    }
+
+    self.postMessage({
+        status: "debug_context",
+        data: contextBuffer,
         });
 
 
     self.postMessage({
       status: "complete",
-      output: out.text,
+      output: text,
     });
   } catch (err) {
     self.postMessage({ status: "error", data: String(err?.stack || err) });
@@ -71,6 +88,7 @@ async function generate({ audio, language }) {
     processing = false;
   }
 }
+
 
 self.addEventListener("message", async (e) => {
   const { type, data } = e.data || {};

@@ -9,7 +9,6 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@xenova/transformers', 'onnxruntime-web'],
   },
-  // AÑADE ESTO (Solución recomendada en tu investigación):
   define: {
     global: 'globalThis',
   },

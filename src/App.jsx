@@ -10,7 +10,10 @@ export default function App() {
 
   const [status, setStatus] = useState("booting");
   const [progress, setProgress] = useState(0);
-  const [transcript, setTranscript] = useState("");
+  const [allMessages, setAllMessages] = useState([]);       // UI (historial completo)
+  const [contextMessages, setContextMessages] = useState([]); // contexto (últimas 4)
+
+
 
   useEffect(() => {
     if (workerRef.current) return;
@@ -38,9 +41,27 @@ export default function App() {
         setProgress(100);
       }
 
-      if (msg.status === "complete") {
-        setTranscript((t) => t + " " + msg.output);
+      if (msg.status === "complete" && msg.output) {
+        const newMsg = {
+          text: msg.output,
+          time: new Date().toLocaleTimeString(),
+        };
+
+        //  UI: guarda TODO
+        setAllMessages((prev) => [...prev, newMsg]);
+
+        //  Contexto: solo últimas 4
+        setContextMessages((prev) => {
+          const updated = [...prev, newMsg];
+          return updated.slice(-4);
+        });
       }
+
+
+      if (msg.status === "debug_context") {
+        console.log("[Worker contextBuffer]", msg.data);
+      }
+
 
       if (msg.status === "error") {
         setStatus("error");
@@ -50,6 +71,24 @@ export default function App() {
 
     w.postMessage({ type: "load" });
   }, []);
+
+  useEffect(() => {
+    console.log(
+      "%c[Context buffer - last 4]",
+      "color:#22c55e;font-weight:bold"
+    );
+
+    console.table(
+      contextMessages.map((m, i) => ({
+        index: i,
+        time: m.time,
+        text: m.text,
+      }))
+    );
+  }, [contextMessages]);
+
+
+
 
   async function startRecording() {
     if (!workerRef.current) return;
@@ -129,10 +168,23 @@ export default function App() {
 
       <div className="transcript">
         <h3>📝 Transcripción</h3>
-        <p>{transcript || "Esperando audio..."}</p>
+
+        {allMessages.length === 0 && (
+          <p className="placeholder">Waiting for speech...</p>
+        )}
+
+        <div className="chat">
+          {allMessages.map((m, i) => (
+            <div key={i} className="chat-line">
+              <span className="time">[{m.time}]</span>
+              <span className="text">{m.text}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
+
 }
 
 function StatusBadge({ status }) {
