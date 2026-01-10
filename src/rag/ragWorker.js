@@ -100,6 +100,7 @@ self.addEventListener("message", async (event) => {
 
       console.log("Contexto recuperado:", context); // Para depurar
 
+
       // 4. GENERACIÓN: Prompt 
       // LaMini-Flan-T5 espera exactamente "Question: ... Context: ..."
       const prompt = `Question: ${question} Context: ${context}\n\nAnswer:`;
@@ -113,9 +114,12 @@ self.addEventListener("message", async (event) => {
         do_sample: false
       });
 
-      self.postMessage({
-        type: "QUERY_DONE",
-        payload: { answer: result[0].generated_text }
+      self.postMessage({ 
+        type: "QUERY_DONE", 
+        payload: { 
+            answer: result[0].generated_text,
+            sources: top2 // top2 es un array de objetos: { text: "...", score: 0.85... }
+        } 
       });
     }
 
