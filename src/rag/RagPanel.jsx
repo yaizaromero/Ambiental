@@ -14,6 +14,7 @@ export default function RagPanel() {
   const [chatHistory, setChatHistory] = useState([]);
 
   useEffect(() => {
+    // Inicializar el Worker
     workerRef.current = new Worker(new URL("./ragWorker.js", import.meta.url), {
       type: "module",
     });
@@ -46,14 +47,21 @@ export default function RagPanel() {
         setIsReady(true);
         setIsBusy(false);
       }
+
       if (type === "QUERY_DONE") {
+        // AQUÍ RECIBIMOS LAS FUENTES (sources) DEL WORKER
         setChatHistory((prev) => [
           ...prev,
-          { type: "bot", text: payload.answer },
+          { 
+            type: "bot", 
+            text: payload.answer, 
+            sources: payload.sources // Guardamos las fuentes para mostrarlas
+          },
         ]);
         setStatus("✅ Esperando pregunta...");
         setIsBusy(false);
       }
+
       if (type === "ERROR") {
         setStatus("❌ Error: " + payload);
         setIsBusy(false);
@@ -161,7 +169,7 @@ export default function RagPanel() {
         height: "100%",
         width: `${progress}%`,
         background: "#4caf50",
-        transition: "width 0.2s ease-in-out" // Transición más rápida para descargas
+        transition: "width 0.2s ease-in-out" 
     },
     chatWindow: {
       height: "350px",
@@ -200,7 +208,7 @@ export default function RagPanel() {
 
   return (
     <div style={styles.container}>
-      <h3 style={styles.header}>RAG</h3>
+      <h3 style={styles.header}>RAG Local</h3>
 
       <div
         onDrop={onDrop}
@@ -225,9 +233,42 @@ export default function RagPanel() {
         {chatHistory.map((msg, index) => (
           <div key={index} style={styles.msgRow}>
             {msg.type === "user" ? (
+                // MENSAJE USUARIO
                 <> <span style={styles.userLabel}>You:</span> <span>{msg.text}</span> </>
             ) : (
-                <> <span style={styles.botLabel}>AI:</span> <span>{msg.text}</span> </>
+                // MENSAJE BOT
+                <div>
+                    <span style={styles.botLabel}>AI:</span> 
+                    <span>{msg.text}</span>
+                    
+                    {/* VISUALIZACIÓN DE FUENTES (CITATIONS) */}
+                    {msg.sources && msg.sources.length > 0 && (
+                        <details style={{ marginTop: "10px", fontSize: "0.85rem", color: "#aaa" }}>
+                            <summary style={{ cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+                                🔍 Ver fuentes ({msg.sources.length})
+                            </summary>
+                            <div style={{ 
+                                paddingLeft: "10px", 
+                                borderLeft: "2px solid #444", 
+                                marginTop: "5px",
+                                display: "flex", 
+                                flexDirection: "column", 
+                                gap: "8px" 
+                            }}>
+                                {msg.sources.map((src, i) => (
+                                    <div key={i} style={{ background: "#2a2a2a", padding: "8px", borderRadius: "4px" }}>
+                                        <div style={{ fontWeight: "bold", color: "#4caf50", fontSize: "0.8em", marginBottom: "3px" }}>
+                                            Fuente {i + 1} • Similitud: {(src.score * 100).toFixed(1)}%
+                                        </div>
+                                        <div style={{ fontStyle: "italic", color: "#ccc", fontSize: "0.9em" }}>
+                                            "{src.text.substring(0, 150)}..." 
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    )}
+                </div>
             )}
           </div>
         ))}
