@@ -7,7 +7,13 @@ export default defineConfig({
     format: 'es',
   },
   optimizeDeps: {
-    // AQUI ESTÁ LA CLAVE: Añadimos 'onnxruntime-web' para que no lo rompa
-    exclude: ['@xenova/transformers', 'onnxruntime-web'],
+    exclude: ['@huggingface/transformers', 'onnxruntime-web'],
+  },
+  server: {
+    headers: {
+      // Necesario para SharedArrayBuffer y WebGPU en algunos contextos
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
   },
 })

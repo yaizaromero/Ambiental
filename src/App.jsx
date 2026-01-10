@@ -2,22 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import './App.css';
 
 function App() {
-  // Estados de la UI
   const [status, setStatus] = useState('BOOTING...');
   const [progress, setProgress] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [output, setOutput] = useState('');
   const [currentColor, setCurrentColor] = useState('#000000');
+  const [prompt, setPrompt] = useState('Analiza la usabilidad de este esquema'); // Prompt por defecto
 
-  // Referencias (para cosas que no renderizan o el Canvas)
   const canvasRef = useRef(null);
   const workerRef = useRef(null);
   const isDrawing = useRef(false);
 
-  // Inicialización del Worker y Eventos
   useEffect(() => {
-    // Importación especial de Vite para Workers
     workerRef.current = new Worker(new URL('./worker.js', import.meta.url), {
       type: 'module',
     });
@@ -29,126 +26,127 @@ function App() {
 
       switch (status) {
         case 'init':
-          setStatus('INICIALIZANDO...');
+          setStatus('INICIALIZANDO ENGINE...');
+          break;
+        case 'loading_model':
+          setStatus('DESCARGANDO NEURAL NET...');
           break;
         case 'progress':
           setProgress(percent);
           setStatus(`CARGANDO CORE... ${percent}%`);
           break;
         case 'ready':
-          setStatus('ONLINE');
-          setProgress(100);
           setIsReady(true);
+          setStatus('SISTEMA ONLINE');
+          setProgress(0);
           break;
         case 'thinking':
           setIsThinking(true);
-          setOutput('');
+          setStatus('PROCESANDO PIZARRA...');
           break;
-        case 'complete':
+        case 'done':
           setIsThinking(false);
-          typeWriterEffect(result);
+          setStatus('ANÁLISIS COMPLETADO');
+          setOutput(result);
           break;
         case 'error':
-          setStatus('ERROR FATAL');
-          console.error(message);
+          setStatus('ERROR DEL SISTEMA');
+          setOutput(message);
+          setIsThinking(false);
           break;
       }
     };
 
-    // Inicializar canvas en blanco
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    return () => workerRef.current.terminate();
+    return () => workerRef.current?.terminate();
   }, []);
 
-  // Efecto máquina de escribir
-  const typeWriterEffect = (text) => {
-    const cleanText = text.replace('<|endoftext|>', '').trim();
-    let i = 0;
-    setOutput('');
-    const interval = setInterval(() => {
-      setOutput((prev) => prev + cleanText.charAt(i));
-      i++;
-      if (i >= cleanText.length) clearInterval(interval);
-    }, 30);
-  };
-
-  // Funciones de Dibujo
+  /* --- Lógica de Dibujo (Igual que antes) --- */
   const startDrawing = (e) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
     isDrawing.current = true;
-    draw(e);
-  };
-
-  const stopDrawing = () => {
-    isDrawing.current = false;
-    const ctx = canvasRef.current.getContext('2d');
+    const { offsetX, offsetY } = getCoordinates(e, canvas);
     ctx.beginPath();
+    ctx.moveTo(offsetX, offsetY);
+    ctx.strokeStyle = currentColor;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
   };
 
   const draw = (e) => {
     if (!isDrawing.current) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    const rect = canvas.getBoundingClientRect();
-    
-    // Soporte para ratón y touch
-    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
-    const clientY = e.clientY || (e.touches && e.touches[0].clientY);
-
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-
-    ctx.lineWidth = 8;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = currentColor;
-
-    ctx.lineTo(x, y);
+    const { offsetX, offsetY } = getCoordinates(e, canvas);
+    ctx.lineTo(offsetX, offsetY);
     ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
   };
 
-  // Acciones
+  const stopDrawing = () => { isDrawing.current = false; };
+  
+  const getCoordinates = (e, canvas) => {
+    if (e.touches) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        offsetX: e.touches[0].clientX - rect.left,
+        offsetY: e.touches[0].clientY - rect.top
+      };
+    }
+    return { offsetX: e.nativeEvent.offsetX, offsetY: e.nativeEvent.offsetY };
+  };
+
   const clearCanvas = () => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = 'white';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     setOutput('');
   };
 
+  // Inicializar fondo blanco (importante para la IA)
+  useEffect(() => {
+    if(canvasRef.current) clearCanvas();
+  }, []);
+
   const handleAnalyze = () => {
-    const imageUrl = canvasRef.current.toDataURL('image/png');
-    workerRef.current.postMessage({ type: 'analyze', image: imageUrl });
+    if (!isReady || isThinking) return;
+    const canvas = canvasRef.current;
+    const image = canvas.toDataURL('image/png');
+    workerRef.current.postMessage({ type: 'analyze', image, prompt });
   };
 
   return (
     <div className="container">
-      {/* Barra de Progreso */}
-      <div style={{ width: '100%' }}>
-        <div className="progress-track">
-          <div 
-            className="progress-bar" 
-            style={{ width: `${progress}%`, opacity: isReady ? 0 : 1 }}
-          ></div>
-        </div>
-        <div className="header">
-          <span style={{ color: 'var(--accent)' }}>SYSTEM</span>
+      <div className="header">
+        <span style={{ fontWeight: 'bold' }}>AI ARCHITECT</span>
+        <div style={{ fontSize: '0.8rem' }}>
+          <span style={{ color: 'var(--accent)' }}>SYSTEM: </span>
           <span style={{ color: isReady ? 'var(--success)' : '#666' }}>
             {status}
           </span>
         </div>
       </div>
 
-      {/* Pizarra */}
+      {/* Tu barra de progreso original */}
+      {progress > 0 && progress < 100 && (
+        <div className="progress-track">
+          <div 
+            className="progress-bar" 
+            style={{ 
+              width: `${progress}%`,
+              height: '100%',
+              background: 'var(--accent)',
+              transition: 'width 0.2s'
+            }} 
+          ></div>
+        </div>
+      )}
+
       <canvas
         ref={canvasRef}
         width={320}
         height={320}
+        style={{ background: 'white', cursor: 'crosshair', borderRadius: '4px' }}
         onMouseDown={startDrawing}
         onMouseMove={draw}
         onMouseUp={stopDrawing}
@@ -158,7 +156,6 @@ function App() {
         onTouchEnd={stopDrawing}
       />
 
-      {/* Herramientas */}
       <div className="tools">
         {['#000000', '#cf6679', '#03dac6', '#3700b3'].map((color) => (
           <div
@@ -168,23 +165,48 @@ function App() {
             onClick={() => setCurrentColor(color)}
           />
         ))}
-        <button className="clear-btn" onClick={clearCanvas} title="Borrar">
-          🗑️
-        </button>
+        <button className="clear-btn" onClick={clearCanvas} title="Borrar">🗑️</button>
       </div>
 
+      {/* Prompt input: Integrado discretamente */}
+      <input 
+        type="text"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Pregunta algo sobre el dibujo..."
+        style={{
+            width: '100%',
+            background: 'transparent',
+            border: 'none',
+            borderBottom: '1px solid #333',
+            color: 'var(--text)',
+            padding: '8px',
+            marginTop: '10px',
+            outline: 'none',
+            fontSize: '0.9rem',
+            textAlign: 'center'
+        }}
+      />
+
       {/* Resultado */}
-      <p className="output-text">
-        {isThinking ? 'PROCESANDO...' : output ? `"${output}"` : ''}
+      <p className="output-text" style={{ fontSize: '0.95rem', minHeight: '60px' }}>
+        {isThinking ? '...' : output}
       </p>
 
-      {/* Botón Principal */}
-      <button
-        className={`analyze-btn ${isReady ? 'visible' : ''}`}
-        onClick={handleAnalyze}
-        disabled={isThinking || !isReady}
+      {/* Botón Principal (Estilo Original) */}
+      <button 
+        onClick={handleAnalyze} 
+        disabled={!isReady || isThinking}
+        style={{
+            marginTop: '10px',
+            width: '100%',
+            background: isReady ? '#333' : '#222',
+            color: isReady ? 'white' : '#555',
+            cursor: isReady ? 'pointer' : 'default',
+            borderColor: isReady ? 'var(--accent)' : 'transparent'
+        }}
       >
-        {isThinking ? '...' : 'ANALIZAR'}
+        ANALIZAR PIZARRA
       </button>
     </div>
   );

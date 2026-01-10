@@ -1,24 +1,20 @@
-import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.1.0";
+import { AutoProcessor, MultiModalityCausalLM, env } from "@huggingface/transformers";
 
-// Configuración para evitar errores de red/cache en Vite
-env.allowLocalModels = false;
 env.useBrowserCache = true;
+env.allowLocalModels = false;
 
-const TASK_NAME = "image-to-text";
-const MODEL_NAME = "Xenova/vit-gpt2-image-captioning";
+env.backends.onnx.wasm.proxy = false; 
 
-let captioner = null;
+const MODEL_ID = "onnx-community/Janus-Pro-1B-ONNX";
+
+let model = null;
+let processor = null;
 
 self.onmessage = async (e) => {
-    const { type, image } = e.data;
-    
+    const { type, image, prompt } = e.data;
     switch (type) {
-        case 'load':
-            await load();
-            break;
-        case 'analyze':
-            await analyze(image);
-            break;
+        case 'load': await load(); break;
+        case 'analyze': await analyze(image, prompt); break;
     }
 };
 
@@ -26,11 +22,17 @@ async function load() {
     self.postMessage({ status: 'init' });
 
     try {
-        captioner = await pipeline(TASK_NAME, MODEL_NAME, {
-            device: 'wasm', // CPU para evitar alucinaciones
-            dtype: 'q8',    // Ligero
+        processor = await AutoProcessor.from_pretrained(MODEL_ID);
+        
+        self.postMessage({ status: 'loading_model' });
+        
+        model = await MultiModalityCausalLM.from_pretrained(MODEL_ID, {
+            device: "webgpu",
+            dtype: "q4", 
+            use_external_data_format: false,
+            
             progress_callback: (data) => {
-                if (data.status === 'progress') {
+                if (data.status === 'progress' && data.total > 10000000) {
                     const percent = data.total ? Math.round((data.loaded / data.total) * 100) : 0;
                     self.postMessage({ status: 'progress', percent: percent });
                 }
@@ -39,27 +41,39 @@ async function load() {
 
         self.postMessage({ status: 'ready' });
     } catch (err) {
-        self.postMessage({ status: 'error', message: err.message });
+        console.error(err);
+        self.postMessage({ status: 'error', message: "Error: " + err.message });
     }
 }
 
-async function analyze(imageUrl) {
-    if (!captioner) return;
+async function analyze(imageUrl, userPrompt) {
+    if (!model || !processor) return;
 
     self.postMessage({ status: 'thinking' });
 
     try {
-        const output = await captioner(imageUrl, {
-            max_new_tokens: 50,
-            do_sample: false
+        const messages = [
+            { 
+                role: "user", 
+                content: userPrompt || "Describe this UI sketch and suggest improvements." 
+            }
+        ];
+
+        const inputs = await processor(messages, imageUrl);
+
+        const outputs = await model.generate({
+            ...inputs,
+            max_new_tokens: 300, 
+            do_sample: false,
         });
 
-        self.postMessage({ 
-            status: 'complete', 
-            result: output[0].generated_text 
-        });
+        const result = processor.batch_decode(outputs, { skip_special_tokens: true })[0];
+        const finalResponse = result.split("Assistant:").pop()?.trim() || result;
+
+        self.postMessage({ status: 'done', result: finalResponse });
 
     } catch (err) {
-        self.postMessage({ status: 'error', message: err.message });
+        console.error(err);
+        self.postMessage({ status: 'error', message: "Error: " + err.message });
     }
 }
