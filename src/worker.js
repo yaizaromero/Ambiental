@@ -1,79 +1,119 @@
-import { AutoProcessor, MultiModalityCausalLM, env } from "@huggingface/transformers";
+import { 
+    AutoProcessor, 
+    Florence2ForConditionalGeneration, 
+    AutoModelForCausalLM, 
+    AutoTokenizer, 
+    RawImage, 
+    env 
+} from "@huggingface/transformers";
 
-env.useBrowserCache = true;
 env.allowLocalModels = false;
-
+env.useBrowserCache = true;
 env.backends.onnx.wasm.proxy = false; 
 
-const MODEL_ID = "onnx-community/Janus-Pro-1B-ONNX";
+const VISION_MODEL_ID = "onnx-community/Florence-2-base-ft";
+const TEXT_MODEL_ID = "Xenova/Qwen1.5-0.5B-Chat";
 
-let model = null;
-let processor = null;
+let visionModel, visionProcessor, textModel, textTokenizer;
 
 self.onmessage = async (e) => {
     const { type, image, prompt } = e.data;
-    switch (type) {
-        case 'load': await load(); break;
-        case 'analyze': await analyze(image, prompt); break;
-    }
+    if (type === 'load') await load();
+    if (type === 'analyze') await analyze(image, prompt);
 };
 
 async function load() {
     self.postMessage({ status: 'init' });
-
     try {
-        processor = await AutoProcessor.from_pretrained(MODEL_ID);
-        
-        self.postMessage({ status: 'loading_model' });
-        
-        model = await MultiModalityCausalLM.from_pretrained(MODEL_ID, {
-            device: "webgpu",
-            dtype: "q4", 
-            use_external_data_format: false,
-            
-            progress_callback: (data) => {
-                if (data.status === 'progress' && data.total > 10000000) {
-                    const percent = data.total ? Math.round((data.loaded / data.total) * 100) : 0;
-                    self.postMessage({ status: 'progress', percent: percent });
-                }
-            }
+        self.postMessage({ status: 'loading_model', message: "Cargando Visión..." });
+        visionProcessor = await AutoProcessor.from_pretrained(VISION_MODEL_ID);
+        try {
+            visionModel = await Florence2ForConditionalGeneration.from_pretrained(VISION_MODEL_ID, {
+                device: "webgpu", dtype: { embed_tokens: "q4", vision_encoder: "q4", encoder: "q4", decoder_model_lm_head: "q4" }, use_external_data_format: false,
+            });
+        } catch (e) {
+            visionModel = await Florence2ForConditionalGeneration.from_pretrained(VISION_MODEL_ID, {
+                device: "wasm", dtype: "q8", use_external_data_format: false,
+            });
+        }
+
+        self.postMessage({ status: 'loading_model', message: "Cargando Cerebro..." });
+        textTokenizer = await AutoTokenizer.from_pretrained(TEXT_MODEL_ID);
+        textModel = await AutoModelForCausalLM.from_pretrained(TEXT_MODEL_ID, {
+            device: "webgpu", dtype: "q4", use_external_data_format: false,
         });
 
         self.postMessage({ status: 'ready' });
     } catch (err) {
-        console.error(err);
-        self.postMessage({ status: 'error', message: "Error: " + err.message });
+        self.postMessage({ status: 'error', message: err.message });
     }
 }
 
 async function analyze(imageUrl, userPrompt) {
-    if (!model || !processor) return;
-
+    if (!visionModel || !textModel) return;
     self.postMessage({ status: 'thinking' });
 
     try {
+        const image = await RawImage.read(imageUrl);
+
+        const visionInputs = await visionProcessor(image, "<MORE_DETAILED_CAPTION>");
+
+        const visionOutputs = await visionModel.generate({ ...visionInputs, max_new_tokens: 100, do_sample: false });
+        
+        const description = visionProcessor.batch_decode(visionOutputs, { skip_special_tokens: false })[0]
+            .replace(/<\/?s>/g, '').replace("<MORE_DETAILED_CAPTION>", '').trim();
+
+        console.log("Vision:", description);
+
         const messages = [
             { 
+                role: "system", 
+                content: `You are a strict UX Auditor. 
+                Task: Analyze the UI element described and list 3 specific improvements.
+                
+                Constraints:
+                - Do NOT hallucinate features not mentioned.
+                - Keep it purely technical (Contrast, Spacing, Labeling, Usability).
+                - Use English ONLY.
+                - SHORT answers. Maximum 15 words per point.
+                - Output format: Numbered list 1, 2, 3.` 
+            },
+            { 
                 role: "user", 
-                content: userPrompt || "Describe this UI sketch and suggest improvements." 
+                content: `UI Element Description: "${description}"
+                User Question: "${userPrompt}"
+                
+                Provide 3 actionable recommendations:` 
             }
         ];
 
-        const inputs = await processor(messages, imageUrl);
-
-        const outputs = await model.generate({
-            ...inputs,
-            max_new_tokens: 300, 
-            do_sample: false,
+        const textInputs = await textTokenizer.apply_chat_template(messages, {
+            add_generation_prompt: true, return_dict: true,
         });
 
-        const result = processor.batch_decode(outputs, { skip_special_tokens: true })[0];
-        const finalResponse = result.split("Assistant:").pop()?.trim() || result;
+        const textOutputs = await textModel.generate({
+            ...textInputs, 
+            max_new_tokens: 200, 
+            do_sample: true, 
+            temperature: 0.2,
+            repetition_penalty: 1.2,
+            top_k: 20
+        });
 
-        self.postMessage({ status: 'done', result: finalResponse });
+        let advice = textTokenizer.batch_decode(textOutputs, { skip_special_tokens: true })[0];
+        advice = advice.split("assistant").pop().trim();
+        advice = advice.replace(/\*\*/g, "").replace(/__/g, "");
+        advice = advice.replace(/[\u4e00-\u9fa5]/g, "");
+
+        const result = `VISUAL ANALYSIS
+${description}
+
+RECOMMENDATIONS
+${advice}`;
+
+        self.postMessage({ status: 'done', result: result });
 
     } catch (err) {
-        console.error(err);
         self.postMessage({ status: 'error', message: "Error: " + err.message });
     }
 }

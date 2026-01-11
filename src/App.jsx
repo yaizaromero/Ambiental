@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import './App.css';
 
 function App() {
-  const [status, setStatus] = useState('BOOTING...');
+  const [status, setStatus] = useState('COMENZANDO...');
   const [progress, setProgress] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [output, setOutput] = useState('');
   const [currentColor, setCurrentColor] = useState('#000000');
-  const [prompt, setPrompt] = useState('Analiza la usabilidad de este esquema'); // Prompt por defecto
+  const [prompt, setPrompt] = useState('Analiza la usabilidad de este esquema');
 
   const canvasRef = useRef(null);
   const workerRef = useRef(null);
@@ -29,20 +29,20 @@ function App() {
           setStatus('INICIALIZANDO ENGINE...');
           break;
         case 'loading_model':
-          setStatus('DESCARGANDO NEURAL NET...');
+          setStatus('DESCARGANDO MODELO...');
           break;
         case 'progress':
           setProgress(percent);
-          setStatus(`CARGANDO CORE... ${percent}%`);
+          setStatus(`CARGANDO MODELO... ${percent}%`);
           break;
         case 'ready':
           setIsReady(true);
-          setStatus('SISTEMA ONLINE');
+          setStatus('MODELO LISTO');
           setProgress(0);
           break;
         case 'thinking':
           setIsThinking(true);
-          setStatus('PROCESANDO PIZARRA...');
+          setStatus('ANALIZANDO PIZARRA...');
           break;
         case 'done':
           setIsThinking(false);
@@ -118,9 +118,9 @@ function App() {
   return (
     <div className="container">
       <div className="header">
-        <span style={{ fontWeight: 'bold' }}>AI ARCHITECT</span>
+        <span style={{ fontWeight: 'bold' }}>VISION MULTIMODAL</span>
         <div style={{ fontSize: '0.8rem' }}>
-          <span style={{ color: 'var(--accent)' }}>SYSTEM: </span>
+          <span style={{ color: 'var(--accent)' }}>SISTEMA: </span>
           <span style={{ color: isReady ? 'var(--success)' : '#666' }}>
             {status}
           </span>
@@ -167,26 +167,6 @@ function App() {
         ))}
         <button className="clear-btn" onClick={clearCanvas} title="Borrar">🗑️</button>
       </div>
-
-      {/* Prompt input: Integrado discretamente */}
-      <input 
-        type="text"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Pregunta algo sobre el dibujo..."
-        style={{
-            width: '100%',
-            background: 'transparent',
-            border: 'none',
-            borderBottom: '1px solid #333',
-            color: 'var(--text)',
-            padding: '8px',
-            marginTop: '10px',
-            outline: 'none',
-            fontSize: '0.9rem',
-            textAlign: 'center'
-        }}
-      />
 
       {/* Resultado */}
       <p className="output-text" style={{ fontSize: '0.95rem', minHeight: '60px' }}>
