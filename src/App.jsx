@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import RagPanel from "./rag/RagPanel"; 
 import "./index.css";
 
-// Configuración de los colores y descripciones de los agentes de los Seis Sombreros
 const AGENTES = {
   "White Agent": { nombre: "White Agent", desc: "Data Processor", color: "#f8f9fa", texto: "#212529", icon: "⚪" },
   "Red Agent": { nombre: "Red Agent", desc: "Sentiment Analyst", color: "#ffebee", texto: "#c62828", icon: "🔴" },
@@ -12,134 +12,200 @@ const AGENTES = {
 };
 
 export default function App() {
-  // Referencias a los Web Workers
+  // === REFS WORKERS ===
   const audioWorker = useRef(null);
   const agentWorker = useRef(null);
+  const visionWorker = useRef(null);
   
-  // Referencias para el manejo de audio
+  // === STATE GLOBAL ===
+  const [audioStatus, setAudioStatus] = useState("booting");
+  const [allMessages, setAllMessages] = useState([]);      
+  const [contextMessages, setContextMessages] = useState([]); 
+
+  const [agentStatus, setAgentStatus] = useState("booting");
+  const [agentResult, setAgentResult] = useState(null);
+  const [agentResponse, setAgentResponse] = useState("");
+
+  const [visionStatus, setVisionStatus] = useState("Iniciando...");
+  const [visionProgress, setVisionProgress] = useState(0);
+  const [isVisionReady, setIsVisionReady] = useState(false);
+  const [visionOutput, setVisionOutput] = useState("");
+  const [currentColor, setCurrentColor] = useState("#000000");
+  const [visionPrompt, setVisionPrompt] = useState("Analiza la usabilidad de este esquema");
+  
+  const canvasRef = useRef(null);
+  const isDrawing = useRef(false);
+  
+  // Referencias específicas de Audio
   const audioContextRef = useRef(null);
   const processorRef = useRef(null);
   const streamRef = useRef(null);
 
-  // Estado del sistema de transcripción de audio
-  const [audioStatus, setAudioStatus] = useState("booting");
-  const [audioProgress, setAudioProgress] = useState(0);
-  const [allMessages, setAllMessages] = useState([]);       // Historial completo de transcripciones
-  const [contextMessages, setContextMessages] = useState([]); // Buffer de las últimas 8 transcripciones
+  // ESTADO DE MODO RAG
+  const [isRagMode, setIsRagMode] = useState(false);
 
-  // Estado del sistema de agentes de análisis
-  const [agentStatus, setAgentStatus] = useState("booting");
-  const [agentProgress, setAgentProgress] = useState(0);
-  const [agentWorkMessage, setAgentWorkMessage] = useState("");
-  const [agentResult, setAgentResult] = useState(null);
-  const [agentResponse, setAgentResponse] = useState("");
+  // ----------------------------------------------------------------
+  // 1. GESTIÓN DE CICLO DE VIDA DE WORKERS (SECUENCIAL)
+  // ----------------------------------------------------------------
 
-  // Inicialización del Worker de audio (Whisper)
-  useEffect(() => {
+  // FASE 1: Iniciar solo Audio y Agentes (Ligeros)
+  const startLightWorkers = useCallback(() => {
+    console.log("🟢 Fase 1: Iniciando servicios ligeros (Secuencial)...");
+
+    // 1. Prioridad: AUDIO (Whisper es ligero pero sensible)
     if (!audioWorker.current) {
-      audioWorker.current = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-      
-      audioWorker.current.onmessage = (e) => {
-        const msg = e.data;
-        if (msg.status === "booted") setAudioStatus("booting");
-        if (msg.status === "loading") {
-          setAudioStatus("loading");
-        }
-        if (msg.status === "ready") {
-          setAudioStatus("ready");
-          setAudioProgress(100);
-        }
-        if (msg.status === "complete" && msg.output) {
-          const newMsg = { text: msg.output, time: new Date().toLocaleTimeString() };
-
-          // Actualización del historial completo
-          setAllMessages((prev) => [...prev, newMsg]);
-
-          // Actualización del buffer con los últimos 8 mensajes
-          setContextMessages((prev) => {
-            const updated = [...prev, newMsg].slice(-8);
-            console.log("Current Context Messages:", updated);
-            return updated;
-          });
-        }
-        if (msg.status === "error") {
-          setAudioStatus("error");
-          console.error(msg.data);
-        }
-      };
-      audioWorker.current.postMessage({ type: "load" });
+        setAudioStatus("Reiniciando...");
+        audioWorker.current = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+        audioWorker.current.onmessage = (e) => {
+            const msg = e.data;
+            if (msg.status === "ready") setAudioStatus("ready");
+            if (msg.status === "complete" && msg.output) {
+                const newMsg = { text: msg.output, time: new Date().toLocaleTimeString() };
+                setAllMessages((prev) => [...prev, newMsg]);
+                setContextMessages((prev) => [...prev, newMsg].slice(-8));
+            }
+        };
+        audioWorker.current.postMessage({ type: "load" });
     }
+
+    // 2. Secundario: AGENTES (Esperar 3s a que Audio estabilice su VRAM)
+    // IMPORTANTE: Este delay evita la colisión de contextos WebGPU
+    setTimeout(() => {
+        if (!agentWorker.current) {
+            setAgentStatus("Cargando IA...");
+            agentWorker.current = new Worker(new URL("./worker_agents.js", import.meta.url), { type: "module" });
+            agentWorker.current.onmessage = (e) => {
+                const { status, result, generatedText, advice } = e.data;
+                if (status === 'ready') setAgentStatus('ready');
+                else if (status === 'working') setAgentStatus('working');
+                else if (status === 'complete') { setAgentStatus('ready'); setAgentResult(result); setAgentResponse(generatedText); }
+                else if (status === 'complete_ux') { setVisionStatus('Completado'); setVisionOutput(advice); setAgentStatus('ready'); }
+            };
+            agentWorker.current.postMessage({ type: 'preload' }); 
+        }
+    }, 3000); // <--- Delay crucial
+
   }, []);
 
-  // Inicialización del Worker de agentes (Six Hats)
-  useEffect(() => {
-    if (!agentWorker.current) {
-      agentWorker.current = new Worker(new URL("./worker_agents.js", import.meta.url), { type: "module" });
-
-      agentWorker.current.onmessage = (e) => {
-        const { status, output, result, generatedText, message } = e.data;
-
-        if (status === 'loading') {
-          setAgentStatus('loading');
-        } else if (status === 'ready') {
-          setAgentStatus('ready');
-          setAgentProgress(100); 
-        } else if (status === 'working') {
-          setAgentStatus('working');
-          setAgentWorkMessage(message);
-        } else if (status === 'complete') {
-          setAgentStatus('ready');
-          setAgentResult(result);
-          setAgentResponse(generatedText);
-        } else if (status === 'error') {
-          setAgentStatus('error');
-          console.error(output);
-        }
-      };
-
-      agentWorker.current.postMessage({ type: 'preload' }); 
-    }
-    return () => agentWorker.current?.terminate();
-  }, []);
-
-  // Captura del audio del microfono
-  async function startRecording() {
-    if (!audioWorker.current) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
-
-    const audioContext = new AudioContext({ sampleRate: 16000 });
-    audioContextRef.current = audioContext;
-
-    const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    processorRef.current = processor;
-
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-
-    let audioBuffer = [];
-
-    // Los datos de audio se procesan en chunks de 2 segundos aproximadamente
-    processor.onaudioprocess = (e) => {
-      audioBuffer.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-      if (audioBuffer.length >= 16) {
-        const chunkSize = audioBuffer[0].length;
-        const flat = new Float32Array(audioBuffer.length * chunkSize);
-
-        audioBuffer.forEach((b, i) => flat.set(b, i * chunkSize));
-        audioBuffer = [];
+  // FASE 2: Iniciar Visión (Pesado - GPU)
+  const startHeavyWorker = useCallback(() => {
+    console.log("🔵 Fase 2: Iniciando motor de Visión...");
+    
+    if (!visionWorker.current) {
+        setVisionStatus("Esperando GPU...");
         
-        // Filtrado de audio con energía baja (silencio)
-        const energy = flat.reduce((sum, v) => sum + Math.abs(v), 0) / flat.length;
-        if (energy < 0.01) return;
-        audioWorker.current.postMessage({ type: "generate", data: { audio: flat } });
-      }
+        // Pequeño delay extra de seguridad antes de instanciar
+        setTimeout(() => {
+            if (isRagMode) return; // Abortar si el usuario volvió a pulsar RAG
+            
+            visionWorker.current = new Worker(new URL("./worker_vision.js", import.meta.url), { type: "module" });
+            visionWorker.current.onmessage = (e) => {
+                const { status, percent, result, description, userPrompt, message } = e.data;
+                
+                if (status === 'init') setVisionStatus('Inicializando...');
+                else if (status === 'loading_model') setVisionStatus(message || 'Cargando...');
+                else if (status === 'progress') { setVisionProgress(percent); setVisionStatus(`${percent.toFixed(0)}%`); }
+                else if (status === 'ready') { setIsVisionReady(true); setVisionStatus('Listo'); setVisionProgress(100); }
+                else if (status === 'analyzing') setVisionStatus('Analizando...');
+                else if (status === 'vision_complete') {
+                     setVisionStatus('Pensando UX...');
+                     if (agentWorker.current) {
+                        agentWorker.current.postMessage({ type: 'ux_audit', description: description, userPrompt: userPrompt });
+                     }
+                }
+                else if (status === 'complete' || status === 'done') { setVisionStatus('Completado'); setVisionOutput(result); }
+            };
+            visionWorker.current.postMessage({ type: 'load' });
+        }, 500);
+    }
+  }, [isRagMode]);
+
+  // Función para MATAR todos los workers
+  const killAllWorkers = useCallback(() => {
+    console.log("🛑 Deteniendo servicios para RAG...");
+    
+    if (visionWorker.current) { visionWorker.current.terminate(); visionWorker.current = null; }
+    setVisionStatus("Pausado (RAG)");
+    setIsVisionReady(false);
+
+    if (audioWorker.current) { audioWorker.current.terminate(); audioWorker.current = null; }
+    setAudioStatus("Pausado (RAG)");
+    
+    if (agentWorker.current) { agentWorker.current.terminate(); agentWorker.current = null; }
+    setAgentStatus("Pausado (RAG)");
+  }, []);
+
+  useEffect(() => {
+    let timerRestart = null;
+    let timerHeavy = null;
+
+    if (isRagMode) {
+        killAllWorkers();
+    } else {
+        console.log("⏳ Iniciando secuencia de restauración...");
+        
+        // PASO A: Esperar 3 SEGUNDOS (antes 2.5) para limpieza profunda post-RAG
+        timerRestart = setTimeout(() => {
+            startLightWorkers(); // Inicia Audio... y a los 3s inicia Agentes
+            
+            // PASO B: Esperar 8 SEGUNDOS TOTALES (3 iniciales + 5 extra) para Visión
+            // Esto asegura que Audio y Agentes ya estén cargados antes de meter Florence
+            timerHeavy = setTimeout(() => {
+                startHeavyWorker();
+            }, 5000); // 5 segundos después de invocar startLightWorkers
+
+        }, 3000); 
+    }
+
+    return () => {
+        clearTimeout(timerRestart);
+        clearTimeout(timerHeavy);
     };
-    setAudioStatus("recording");
+  }, [isRagMode, killAllWorkers, startLightWorkers, startHeavyWorker]);
+
+  // Arranque inicial (Primera carga)
+  useEffect(() => {
+    startLightWorkers();
+    startHeavyWorker();
+    return () => killAllWorkers();
+  }, []); // eslint-disable-line
+
+  // ----------------------------------------------------------------
+  // FUNCIONES DE AUDIO
+  // ----------------------------------------------------------------
+  async function startRecording() {
+    if (isRagMode) return alert("Espera a que termine el RAG");
+    if (!audioWorker.current) return;
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = stream;
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        audioContextRef.current = audioContext;
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        let audioBuffer = [];
+        processor.onaudioprocess = (e) => {
+          audioBuffer.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+          if (audioBuffer.length >= 16) { 
+            const flat = new Float32Array(audioBuffer.reduce((acc, val) => acc + val.length, 0));
+            let offset = 0;
+            audioBuffer.forEach(b => { flat.set(b, offset); offset += b.length; });
+            audioBuffer = [];
+            const energy = flat.reduce((sum, v) => sum + Math.abs(v), 0) / flat.length;
+            if (energy > 0.01 && audioWorker.current) {
+                audioWorker.current.postMessage({ type: "generate", data: { audio: flat } });
+            }
+          }
+        };
+        setAudioStatus("recording");
+    } catch (err) { console.error(err); setAudioStatus("error"); }
   }
 
-  // Detención de la grabación y liberación de recursos
   function stopRecording() {
     processorRef.current?.disconnect();
     audioContextRef.current?.close();
@@ -147,299 +213,168 @@ export default function App() {
     setAudioStatus("ready");
   }
 
-  // Envío del contexto de transcripción
   const analyzeTranscription = () => {
+    if (isRagMode) return;
+    if (!agentWorker.current) return;
     if (contextMessages.length === 0) return;
-
     setAgentStatus('working');
     setAgentResult(null);
     setAgentResponse('');
-
-    // Se juntan las ultimas transcripciones en string, para enviarlas al agente
-    const bufferText = contextMessages
-      .map(msg => msg.text)
-      .join(" "); 
-
-    console.log("Sending Buffer to Agent (Last 8 lines):", bufferText);
-    
+    const bufferText = contextMessages.map(msg => msg.text).join(" "); 
     agentWorker.current.postMessage({ text: bufferText });
   };
 
-  const currentAgent = agentResult ? AGENTES[agentResult.labels[0]] : null;
-  const isAgentWorking = agentStatus === 'working' || agentStatus === 'loading';
-  const isAgentLoading = agentStatus.includes('loading');
+  // ----------------------------------------------------------------
+  // FUNCIONES CANVAS
+  // ----------------------------------------------------------------
+  const getCoordinates = (nativeEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return { x: (nativeEvent.clientX - rect.left) * scaleX, y: (nativeEvent.clientY - rect.top) * scaleY };
+  };
 
-  return (
-    <div className="app" style={{ maxWidth: '1200px', margin: '0 auto', fontFamily: 'sans-serif' }}>
-      
-      {/* Seccion estados de los modelos */}
-      <div style={{ textAlign: 'center', marginBottom: '30px', marginTop: '20px' }}>
-        <h1>🧠 Private Brainstorming</h1>
-        <div style={{ display: 'flex', gap: '15px', justifyContent: 'center', marginBottom: '15px' }}>
-           <StatusBadge status={audioStatus} label="Audio Model" />
-           <StatusBadge status={agentStatus} label="Agent Model" />
-        </div>
-      </div>
+  const startDrawing = ({ nativeEvent }) => {
+    const { x, y } = getCoordinates(nativeEvent);
+    const ctx = canvasRef.current.getContext('2d');
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.strokeStyle = currentColor; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    isDrawing.current = true;
+  };
 
-      {/* Zona de los botones */}
-      <div className="controls" style={{ 
-          display: 'flex', 
-          gap: '15px', 
-          justifyContent: 'center', 
-          marginBottom: '30px',
-          padding: '20px',
-          backgroundColor: '#1a1a1a',
-          borderRadius: '12px'
-      }}>
-        <button 
-          onClick={startRecording} 
-          disabled={audioStatus !== "ready"}
-          style={{ padding: '10px 25px', cursor: 'pointer', fontSize: '1.1rem', borderRadius: '6px' }}
-        >
-          ▶ Start
-        </button>
-        
-        <button 
-          onClick={stopRecording} 
-          disabled={audioStatus !== "recording"}
-          style={{ padding: '10px 25px', cursor: 'pointer', fontSize: '1.1rem', borderRadius: '6px' }}
-        >
-          ⏹ Stop
-        </button>
+  const draw = ({ nativeEvent }) => {
+    if (!isDrawing.current) return;
+    const { x, y } = getCoordinates(nativeEvent);
+    const ctx = canvasRef.current.getContext('2d'); ctx.lineTo(x, y); ctx.stroke();
+  };
 
-        <div style={{ width: '2px', backgroundColor: '#444', margin: '0 10px' }}></div>
-
-        <button 
-            onClick={analyzeTranscription} 
-            disabled={contextMessages.length === 0 || isAgentLoading || isAgentWorking}
-            style={{ 
-              padding: '10px 25px', 
-              backgroundColor: '#4a90e2', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '6px', 
-              cursor: isAgentWorking ? 'wait' : 'pointer',
-              fontSize: '1.1rem',
-              fontWeight: 'bold',
-              opacity: contextMessages.length === 0 ? 0.5 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px'
-            }}
-          >
-            {isAgentWorking ? 'Analyzing...' : 'Assistant Help'}
-        </button>
-      </div>
-
-      {/* Diseño de dos columnas */}
-      <div style={{ 
-        display: 'flex', 
-        gap: '20px',
-        alignItems: 'stretch', 
-        minHeight: '500px'
-      }}>
-        
-        {/* Columna izquierda: Historial de transcripción */}
-        <div style={{ 
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            backgroundColor: '#111', 
-            borderRadius: '12px', 
-            overflow: 'hidden',
-            border: '1px solid #333'
-        }}>
-          <div style={{ 
-              backgroundColor: '#222', 
-              padding: '0 20px', 
-              height: '80px', 
-              display: 'flex',
-              alignItems: 'center',
-              borderBottom: '1px solid #333'
-          }}>
-            <div>
-              <h3 style={{ margin: 0, color: '#fff', fontSize: '1.2rem' }}>Transcription History</h3>
-            </div>
-          </div>
-          
-          <div className="chat" style={{ 
-              flex: 1, 
-              padding: '20px', 
-              overflowY: 'auto',
-              backgroundColor: '#000',
-              maxHeight: '500px' 
-          }}>
-            {allMessages.length === 0 && (
-              <div style={{ textAlign: 'center', marginTop: '40px', color: '#666' }}>
-                <p style={{ fontSize: '1.1rem', fontStyle: 'italic', margin: 0 }}>Waiting for speech...</p>
-              </div>
-            )}
-            {allMessages.map((m, i) => (
-              <div key={i} style={{ 
-                  marginBottom: '12px', 
-                  opacity: i < allMessages.length - 8 ? 0.5 : 1, 
-                  transition: 'opacity 0.3s',
-                  display: 'flex',
-                  gap: '10px'
-              }}>
-                <span style={{ color: '#666', fontSize: '0.8rem', fontFamily: 'monospace', minWidth: '60px' }}>[{m.time}]</span> 
-                <span style={{ color: '#fff', lineHeight: '1.4' }}>{m.text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Columna derecha: Panel de agente */}
-        <div style={{ 
-             flex: 1,
-             display: 'flex',
-             flexDirection: 'column',
-             borderRadius: '12px',
-             overflow: 'hidden',
-             border: currentAgent ? `2px solid ${currentAgent.color}` : '2px dashed #444',
-             backgroundColor: '#111',
-             position: 'relative'
-        }}>
-          
-          {/* Estado: Procesando */}
-          {isAgentWorking && (
-             <div style={{ 
-                 height: '100%', 
-                 display: 'flex', 
-                 flexDirection: 'column',
-                 alignItems: 'center', 
-                 justifyContent: 'center',
-                 color: '#fff',
-                 backgroundColor: '#111'
-             }}>
-                <LoadingSpinner />
-                <p style={{ marginTop: '25px', fontSize: '1.2rem', color: '#4a90e2', fontWeight: 'bold' }}>
-                  {agentWorkMessage}
-                </p>
-             </div>
-          )}
-
-          {/* Estado: Resultado disponible */}
-          {!isAgentWorking && currentAgent && (
-            <>
-              <div style={{ 
-                  backgroundColor: currentAgent.color, 
-                  color: currentAgent.texto, 
-                  padding: '0 20px', 
-                  height: '80px', 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '15px',
-              }}>
-                <span style={{ fontSize: '35px' }}>{currentAgent.icon}</span>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '1.2rem' }}>{currentAgent.nombre}</h3>
-                  <small style={{ opacity: 0.9 }}>{currentAgent.desc}</small>
-                </div>
-                <div style={{ marginLeft: 'auto', textAlign: 'right', fontSize: '0.85rem' }}>
-                   <div>Confidence</div>
-                   <div style={{ fontWeight: 'bold' }}>{(agentResult.scores[0] * 100).toFixed(0)}%</div>
-                </div>
-              </div>
-
-              <div style={{ 
-                  padding: '25px', 
-                  backgroundColor: '#ffffff', 
-                  flex: 1, 
-                  overflowY: 'auto',
-                  maxHeight: '500px'
-              }}>
-                <div style={{ 
-                    fontSize: '16px', 
-                    lineHeight: '1.6', 
-                    whiteSpace: 'pre-wrap',
-                    color: '#000000',  
-                }}>
-                  {agentResponse || "Generating insight..."}
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Estado: Inactivo */}
-          {!isAgentWorking && !currentAgent && (
-             <div style={{ 
-                 height: '100%', 
-                 display: 'flex', 
-                 alignItems: 'center', 
-                 justifyContent: 'center',
-                 color: '#666',
-             }}>
-                <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '40px', marginBottom: '10px' }}>🧠</div>
-                    <p>Record audio, then click<br/><strong style={{ color: '#4a90e2' }}>Assistant Help</strong></p>
-                </div>
-             </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Componente estados de los modelos
-function StatusBadge({ status, label }) {
-  const colors = { 
-      booting: "orange", 
-      loading: "blue", 
-      ready: "green", 
-      recording: "red",
-      working:"red", 
-      error: "red" 
+  const stopDrawing = () => { if(canvasRef.current) { const ctx = canvasRef.current.getContext('2d'); ctx.closePath(); } isDrawing.current = false; };
+  
+  const clearCanvas = () => {
+    const ctx = canvasRef.current.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height); setVisionOutput("");
   };
   
-  const s = status.includes("loading") ? "loading" : status;
-  const badgeColor = colors[s] || 'black';
+  const analyzeCanvas = async () => {
+    if (isRagMode) return alert("Espera a que termine el RAG");
+    if (!visionWorker.current || !isVisionReady) return;
+    const blob = await new Promise(resolve => canvasRef.current.toBlob(resolve, 'image/png'));
+    visionWorker.current.postMessage({ type: 'analyze', image: blob, prompt: visionPrompt });
+  };
+
+  const currentAgent = agentResult ? AGENTES[agentResult.labels[0]] : null;
 
   return (
-    <span style={{ 
-        padding: '6px 12px', 
-        borderRadius: '20px', 
-        background: '#eee',       
-        fontSize: '13px', 
-        border: `2px solid ${badgeColor}`,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '6px',
-        color: '#000000'
-    }}>
-      <strong style={{ color: '#000000' }}>{label}:</strong> 
+    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
       
-      <span style={{ 
-          color: badgeColor, 
-          fontWeight: 'bold', 
-          textTransform: 'capitalize' 
-      }}>
-        {status}
-      </span>
-    </span>
+      {/* COLUMNA 1 */}
+      <div style={{ width: '33.33%', minWidth: '400px', backgroundColor: '#020617', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '20px', borderBottom: '1px solid #1e293b', backgroundColor: '#0f172a' }}>
+            <h1 style={{ margin: '0 0 10px 0', fontSize: '1.4rem', textAlign: 'center' }}>🧠 Brainstorming</h1>
+            
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '10px' }}>
+                <StatusBadge status={audioStatus} label="Audio" />
+                <StatusBadge status={agentStatus} label="Agent" />
+            </div>
+            
+            {isRagMode && (
+                <div style={{textAlign:'center', color:'#eab308', fontSize:'0.8rem', padding:'5px', background:'#422006', borderRadius:'4px', marginBottom:'10px'}}>
+                    ⚠️ Servicios detenidos para RAG
+                </div>
+            )}
+            
+            <div className="controls" style={{ display: 'flex', gap: '8px', justifyContent: 'center', backgroundColor: '#1a1a1a', padding: '10px', borderRadius: '8px', opacity: isRagMode ? 0.4 : 1, transition: 'opacity 0.3s' }}>
+                <button onClick={startRecording} disabled={isRagMode || audioStatus !== "ready"} style={{ flex: 1, padding: '8px', borderRadius: '6px', background: audioStatus === 'recording' ? '#dc2626' : '#334155', color: 'white', border:'none', cursor: isRagMode || audioStatus !== "ready" ? 'not-allowed' : 'pointer' }}>
+                   {audioStatus === 'recording' ? '● Rec' : '▶ Start'}
+                </button>
+                <button onClick={stopRecording} disabled={isRagMode || audioStatus !== "recording"} style={{ flex: 1, padding: '8px', borderRadius: '6px', background: '#334155', color: 'white', border:'none', cursor: isRagMode || audioStatus !== "recording" ? 'not-allowed' : 'pointer' }}>
+                    ⏹ Stop
+                </button>
+                <button onClick={analyzeTranscription} disabled={isRagMode || contextMessages.length === 0} style={{ flex: 2, padding: '8px', background: '#2563eb', color: 'white', border:'none', borderRadius:'6px', cursor: isRagMode || contextMessages.length === 0 ? 'not-allowed' : 'pointer' }}>
+                    ⚡ AI Help
+                </button>
+            </div>
+        </div>
+
+        <div style={{ flex: 1, padding: '15px', overflowY: 'auto' }}>
+            {allMessages.map((m, i) => (
+               <div key={i} style={{ marginBottom: '8px', color:'#e2e8f0', fontSize:'0.9rem', display: 'flex', gap: '10px' }}>
+                 <span style={{ color: '#64748b', fontSize: '0.75rem', minWidth: '50px', fontFamily: 'monospace' }}>{m.time}</span>
+                 <span>{m.text}</span>
+               </div>
+            ))}
+        </div>
+
+        <div style={{ flex: 1, padding: '15px', backgroundColor: currentAgent ? '#fff' : '#0f172a', color: currentAgent ? '#000' : '#fff', overflowY: 'auto', borderTop: '1px solid #334155' }}>
+             {currentAgent && (
+                 <div style={{fontWeight:'bold', marginBottom:'10px', display: 'flex', alignItems: 'center', gap: '10px'}}>
+                     <span style={{fontSize:'1.5rem'}}>{currentAgent.icon}</span> 
+                     {currentAgent.nombre}
+                 </div>
+             )}
+             <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{agentResponse}</div>
+        </div>
+      </div>
+
+      {/* COLUMNA 2 */}
+      <div style={{ width: '33.33%', minWidth: '400px', backgroundColor: '#0f172a', borderRight: '1px solid #334155', display: 'flex', flexDirection: 'column' }}>
+          <div className="vision-panel">
+              <h2 style={{ color: '#e2e8f0', fontSize:'1.2rem', display:'flex', alignItems:'center', gap:'10px' }}>
+                👁️ Vision <StatusBadge status={visionStatus} label="Engine" />
+              </h2>
+              
+              {!isVisionReady && !isRagMode && (
+                <div style={{ width: '100%', marginBottom: '10px' }}>
+                  <div className="progress-track"><div className="progress-bar" style={{ width: `${visionProgress}%` }}></div></div>
+                </div>
+              )}
+
+              <div className="canvas-container" style={{ position: 'relative' }}>
+                {isRagMode && (
+                    <div style={{ position: 'absolute', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.9)', zIndex:10, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'white', borderRadius:'8px' }}>
+                        <span style={{ fontSize: '2rem' }}>🔒</span>
+                        <p style={{ marginTop: '10px' }}>GPU reservada para RAG</p>
+                    </div>
+                )}
+                <canvas ref={canvasRef} width={500} height={300} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseOut={stopDrawing} />
+              </div>
+
+              <div className="tools">
+                 {['#000000', '#ef4444', '#10b981', '#3b82f6', '#f59e0b'].map((color) => (
+                  <div key={color} className={`color-btn ${currentColor === color ? 'active' : ''}`} style={{ backgroundColor: color }} onClick={() => setCurrentColor(color)} />
+                 ))}
+                 <div style={{ width: '1px', height: '20px', background: '#475569', margin: '0 5px' }}></div>
+                 <button className="clear-btn" onClick={clearCanvas} style={{cursor:'pointer'}} title="Borrar">🗑️</button>
+              </div>
+
+              <button onClick={analyzeCanvas} disabled={isRagMode || !isVisionReady} style={{ width: '100%', padding: '12px', marginTop: '10px', background: isVisionReady ? '#3b82f6' : '#1e293b', color: 'white', border:'none', borderRadius:'8px', cursor: isRagMode || !isVisionReady ? 'not-allowed' : 'pointer', opacity: isVisionReady ? 1 : 0.6 }}>
+                {isRagMode ? 'Sistema Pausado' : '✨ Analizar Diseño'}
+              </button>
+              
+              {visionOutput && <div className="vision-output" style={{ marginTop:'15px' }}><strong>Análisis Visual:</strong><br/>{visionOutput}</div>}
+          </div>
+      </div>
+
+      {/* COLUMNA 3 */}
+      <div style={{ flex: 1, backgroundColor: '#020617', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <RagPanel onRagActivity={setIsRagMode} />
+      </div>
+
+    </div>
   );
 }
 
-// Componente de spinner de carga
-function LoadingSpinner() {
-  return (
-    <div className="spinner-container">
-      <style>{`
-        .spinner {
-          width: 50px;
-          height: 50px;
-          border: 5px solid rgba(255, 255, 255, 0.1);
-          border-left-color: #4a90e2; 
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
-      <div className="spinner"></div>
-    </div>
-  );
+function StatusBadge({ status, label }) {
+    const s = String(status).toLowerCase();
+    let color = "#94a3b8";
+    if (s.includes("ready") || s.includes("listo")) color = "#10b981";
+    if (s.includes("loading") || s.includes("reiniciando") || s.includes("iniciando") || s.includes("esperando")) color = "#3b82f6";
+    if (s.includes("apagado") || s.includes("pausado")) color = "#ef4444";
+    if (s.includes("recording")) color = "#ef4444";
+    
+    return (
+      <span style={{ padding: '2px 8px', borderRadius: '12px', background: '#1e293b', fontSize: '10px', border: `1px solid ${color}`, color: '#e2e8f0', marginLeft:'5px' }}>
+        {label} <span style={{ color: color, fontWeight: 'bold' }}>{status}</span>
+      </span>
+    );
 }

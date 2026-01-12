@@ -83,7 +83,8 @@ async function ensureModelsLoaded(progressCallback) {
 
 // Manejo de mensajes del worker
 self.addEventListener('message', async (event) => {
-    const { type, text } = event.data;
+    // Añado description y userPrompt para el caso de UX
+    const { type, text, description, userPrompt } = event.data;
 
     try {
         // Escenario 1: Mensaje para iniciar la carga de los modelos
@@ -95,6 +96,56 @@ self.addEventListener('message', async (event) => {
 
         // Escenario 2: Mensaje para realizar el procesamiento completo (clasificación + generación)
         await ensureModelsLoaded(output => self.postMessage({ status: 'loading', output }));
+
+        // === NUEVO: Lógica migrada de Visión (UX Audit) ===
+        if (type === 'ux_audit') {
+            self.postMessage({ status: 'working', message: 'Analyzing UX...' });
+
+            const messages = [
+                { 
+                    role: "system", 
+                    content: `You are a strict UX Auditor. 
+                Task: Analyze the UI element described and list 3 specific improvements.
+                
+                Constraints:
+                - Do NOT hallucinate features not mentioned.
+                - Keep it purely technical (Contrast, Spacing, Labeling, Usability).
+                - Use English ONLY.
+                - SHORT answers. Maximum 15 words per point.
+                - Output format: ONLY ONE list of the 3 improvements.` 
+                },
+                { 
+                    role: "user", 
+                    content: `UI Element Description: "${description}"
+                User Question: "${userPrompt}"
+                
+                Provide 3 actionable recommendations:` 
+                }
+            ];
+
+            const textOutputs = await OrquestadorPipeline.generator(messages, {
+                max_new_tokens: 200, 
+                do_sample: true, 
+                temperature: 0.2,
+                repetition_penalty: 1.2,
+                top_k: 20
+            });
+
+            // Lógica de limpieza exacta del worker original
+            let advice = textOutputs[0].generated_text.at(-1).content;
+            advice = advice.replace(/\*\*/g, "").replace(/__/g, "");
+            advice = advice.replace(/[\u4e00-\u9fa5]/g, "");
+
+            const result = `VISUAL ANALYSIS
+${description}
+
+RECOMMENDATIONS
+${advice}`;
+
+            self.postMessage({ status: 'complete_ux', advice: result });
+            return;
+        }
+        // =================================================
 
         // Fase 1: Clasificación del texto para seleccionar el agente apropiado
         const labelMapping = {

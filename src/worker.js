@@ -14,12 +14,12 @@ async function load() {
   try {
     self.postMessage({ status: "loading", data: "Loading model..." });
 
-    const device = ("gpu" in navigator) ? "webgpu" : "wasm";
+    const deviceUse = ("gpu" in navigator) ? "webgpu" : "wasm";
 
     asr = await pipeline(
       "automatic-speech-recognition",
       "onnx-community/whisper-small",
-      { device }
+      { device: deviceUse, dtype: "q4", }
     );
 
     self.postMessage({
