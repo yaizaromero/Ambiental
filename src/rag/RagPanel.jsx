@@ -19,7 +19,7 @@ export default function RagPanel({ onRagActivity }) {
   const workerRef = useRef(null);
   const chatEndRef = useRef(null);
 
-  const [status, setStatus] = useState("Esperando PDF...");
+  const [status, setStatus] = useState("Waiting for PDF...");
   const [isBusy, setIsBusy] = useState(false);
   const [progress, setProgress] = useState(0); 
   const [question, setQuestion] = useState("");
@@ -40,20 +40,20 @@ export default function RagPanel({ onRagActivity }) {
       if (type === "STATUS") setStatus(payload);
       
       if (type === "download_progress") {
-         setStatus(`Cargando... ${payload.percent}%`);
+         setStatus(`Loading... ${payload.percent}%`);
          setProgress(payload.percent);
       }
 
       if (type === "INDEX_COMPLETE") {
-        setStatus("Listo.");
+        setStatus("Ready.");
         setIsBusy(false);
         setIsReady(true);
-        addMessage("system", "Documento indexado.");
+        addMessage("system", "Indexed Document.");
       }
 
       if (type === "ANSWER_COMPLETE") {
         setIsBusy(false);
-        setStatus("Listo");
+        setStatus("Ready");
         addMessage("bot", payload.answer, payload.sources);
         if (onRagActivity) onRagActivity(false); 
       }
@@ -78,7 +78,7 @@ export default function RagPanel({ onRagActivity }) {
     if (!file) return;
 
     setIsBusy(true);
-    setStatus("Leyendo PDF...");
+    setStatus("Reading PDF...");
     setChatHistory([]); 
     
     try {
@@ -86,7 +86,7 @@ export default function RagPanel({ onRagActivity }) {
       // Usamos directamente la función importada al principio del archivo.
       const { text } = await extractTextFromPdfFile(file);
       
-      setStatus("Indexando...");
+      setStatus("Indexing...");
       workerRef.current.postMessage({ type: "INDEX_TEXT", payload: { text } });
     } catch (err) {
       console.error(err);
@@ -103,12 +103,12 @@ export default function RagPanel({ onRagActivity }) {
     addMessage("user", q);
     
     setIsBusy(true);
-    setStatus("Liberando GPU..."); 
+    setStatus("Releasing GPU..."); 
     if (onRagActivity) onRagActivity(true);
 
     // DELAY DE SEGURIDAD (1.5s)
     setTimeout(() => {
-        setStatus("Generando...");
+        setStatus("Generating...");
         workerRef.current.postMessage({ type: "ASK_QUESTION", payload: { question: q } });
     }, 1500);
   };
@@ -127,7 +127,7 @@ export default function RagPanel({ onRagActivity }) {
                     <div style={{ width: `${progress}%`, background: '#8b5cf6', height: '100%' }}></div>
                 </div>
             ) : (
-                <span>📂 {isReady ? "Cambiar PDF" : "Subir PDF"}</span>
+                <span>📂 {isReady ? "Change PDF" : "Upload PDF"}</span>
             )}
          </label>
       </div>
@@ -156,11 +156,11 @@ export default function RagPanel({ onRagActivity }) {
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && ask()}
-          placeholder={isReady ? "Pregunta..." : "Sube PDF"}
+          placeholder={isReady ? "Question..." : "Upload PDF"}
           style={{ ...styles.input, opacity: isReady ? 1 : 0.5 }}
           disabled={!isReady || isBusy}
         />
-        <button onClick={ask} disabled={!isReady || isBusy} style={{ ...styles.button, opacity: isReady ? 1 : 0.5 }}>Enviar</button>
+        <button onClick={ask} disabled={!isReady || isBusy} style={{ ...styles.button, opacity: isReady ? 1 : 0.5 }}>Send</button>
       </div>
     </div>
   );

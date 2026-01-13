@@ -23,7 +23,7 @@ self.onmessage = async (e) => {
 async function load() {
     self.postMessage({ status: 'init' });
     try {
-        self.postMessage({ status: 'loading_model', message: "Cargando Visión..." });
+        self.postMessage({ status: 'loading_model', message: "Loading Vision..." });
         visionProcessor = await AutoProcessor.from_pretrained(VISION_MODEL_ID);
         try {
             visionModel = await Florence2ForConditionalGeneration.from_pretrained(VISION_MODEL_ID, {

@@ -54,7 +54,7 @@ export default function App() {
 
     // 1. Prioridad: AUDIO (Whisper es ligero pero sensible)
     if (!audioWorker.current) {
-        setAudioStatus("Reiniciando...");
+        setAudioStatus("Initializing...");
         audioWorker.current = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
         audioWorker.current.onmessage = (e) => {
             const msg = e.data;
@@ -72,14 +72,14 @@ export default function App() {
     // IMPORTANTE: Este delay evita la colisión de contextos WebGPU
     setTimeout(() => {
         if (!agentWorker.current) {
-            setAgentStatus("Cargando IA...");
+            setAgentStatus("Loading AI...");
             agentWorker.current = new Worker(new URL("./worker_agents.js", import.meta.url), { type: "module" });
             agentWorker.current.onmessage = (e) => {
                 const { status, result, generatedText, advice } = e.data;
                 if (status === 'ready') setAgentStatus('ready');
                 else if (status === 'working') setAgentStatus('working');
                 else if (status === 'complete') { setAgentStatus('ready'); setAgentResult(result); setAgentResponse(generatedText); }
-                else if (status === 'complete_ux') { setVisionStatus('Completado'); setVisionOutput(advice); setAgentStatus('ready'); }
+                else if (status === 'complete_ux') { setVisionStatus('Completed'); setVisionOutput(advice); setAgentStatus('ready'); }
             };
             agentWorker.current.postMessage({ type: 'preload' }); 
         }
@@ -92,7 +92,7 @@ export default function App() {
     console.log("🔵 Fase 2: Iniciando motor de Visión...");
     
     if (!visionWorker.current) {
-        setVisionStatus("Esperando GPU...");
+        setVisionStatus("Waiting GPU...");
         
         // Pequeño delay extra de seguridad antes de instanciar
         setTimeout(() => {
@@ -101,19 +101,19 @@ export default function App() {
             visionWorker.current = new Worker(new URL("./worker_vision.js", import.meta.url), { type: "module" });
             visionWorker.current.onmessage = (e) => {
                 const { status, percent, result, description, userPrompt, message } = e.data;
-                
-                if (status === 'init') setVisionStatus('Inicializando...');
-                else if (status === 'loading_model') setVisionStatus(message || 'Cargando...');
+
+                if (status === 'init') setVisionStatus('Initializing...');
+                else if (status === 'loading_model') setVisionStatus(message || 'Loading...');
                 else if (status === 'progress') { setVisionProgress(percent); setVisionStatus(`${percent.toFixed(0)}%`); }
-                else if (status === 'ready') { setIsVisionReady(true); setVisionStatus('Listo'); setVisionProgress(100); }
-                else if (status === 'analyzing') setVisionStatus('Analizando...');
+                else if (status === 'ready') { setIsVisionReady(true); setVisionStatus('Ready'); setVisionProgress(100); }
+                else if (status === 'analyzing') setVisionStatus('Analyzing...');
                 else if (status === 'vision_complete') {
-                     setVisionStatus('Pensando UX...');
+                     setVisionStatus('Thinking UX...');
                      if (agentWorker.current) {
                         agentWorker.current.postMessage({ type: 'ux_audit', description: description, userPrompt: userPrompt });
                      }
                 }
-                else if (status === 'complete' || status === 'done') { setVisionStatus('Completado'); setVisionOutput(result); }
+                else if (status === 'complete' || status === 'done') { setVisionStatus('Completed'); setVisionOutput(result); }
             };
             visionWorker.current.postMessage({ type: 'load' });
         }, 500);
@@ -333,7 +333,7 @@ export default function App() {
                 {isRagMode && (
                     <div style={{ position: 'absolute', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.9)', zIndex:10, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'white', borderRadius:'8px' }}>
                         <span style={{ fontSize: '2rem' }}>🔒</span>
-                        <p style={{ marginTop: '10px' }}>GPU reservada para RAG</p>
+                        <p style={{ marginTop: '10px' }}>GPU Reserved for RAG</p>
                     </div>
                 )}
                 <canvas ref={canvasRef} width={500} height={300} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseOut={stopDrawing} />
@@ -344,11 +344,11 @@ export default function App() {
                   <div key={color} className={`color-btn ${currentColor === color ? 'active' : ''}`} style={{ backgroundColor: color }} onClick={() => setCurrentColor(color)} />
                  ))}
                  <div style={{ width: '1px', height: '20px', background: '#475569', margin: '0 5px' }}></div>
-                 <button className="clear-btn" onClick={clearCanvas} style={{cursor:'pointer'}} title="Borrar">🗑️</button>
+                 <button className="clear-btn" onClick={clearCanvas} style={{cursor:'pointer'}} title="Delete">🗑️</button>
               </div>
 
               <button onClick={analyzeCanvas} disabled={isRagMode || !isVisionReady} style={{ width: '100%', padding: '12px', marginTop: '10px', background: isVisionReady ? '#3b82f6' : '#1e293b', color: 'white', border:'none', borderRadius:'8px', cursor: isRagMode || !isVisionReady ? 'not-allowed' : 'pointer', opacity: isVisionReady ? 1 : 0.6 }}>
-                {isRagMode ? 'Sistema Pausado' : '✨ Analizar Diseño'}
+                {isRagMode ? 'Paused System' : '✨ Analyze Design'}
               </button>
               
               {visionOutput && <div className="vision-output" style={{ marginTop:'15px' }}><strong>Análisis Visual:</strong><br/>{visionOutput}</div>}
