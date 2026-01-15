@@ -1,9 +1,9 @@
 # Brainstorming Privado (Ambiental)
 **Sistema inteligente de apoyo al brainstorming con privacidad total (Local-First)**
 
-Este proyecto implementa una aplicación web **100% client-side** que asiste sesiones de brainstorming **sin enviar datos a la nube**: transcribe audio en tiempo real, ofrece intervención “agéntica” basada en **Seis Sombreros para Pensar**, analiza esquemas dibujados en un **canvas** y permite consultar **PDFs locales** mediante un pipeline **RAG** ejecutado en el navegador. :contentReference[oaicite:2]{index=2}
+Este proyecto implementa una aplicación web **100% client-side** que asiste sesiones de brainstorming **sin enviar datos a la nube**: transcribe audio en tiempo real, ofrece intervención “agéntica” basada en **Seis Sombreros para Pensar**, analiza esquemas dibujados en un **canvas** y permite consultar **PDFs locales** mediante un pipeline **RAG** ejecutado en el navegador. 
 
-> Objetivo principal: digitalizar y potenciar sesiones presenciales de ideación en entornos sensibles (I+D/estratégicos) garantizando que **ningún byte** salga del equipo del usuario. :contentReference[oaicite:3]{index=3}
+> Objetivo principal: digitalizar y potenciar sesiones presenciales de ideación en entornos sensibles (I+D/estratégicos) garantizando que **ningún byte** salga del equipo del usuario. 
 
 ---
 
@@ -21,7 +21,7 @@ Este proyecto implementa una aplicación web **100% client-side** que asiste ses
   - Ideal: Chrome/Edge con **WebGPU** habilitado.
   - Alternativa: fallback a WASM/CPU (más lento).
 - Permiso de **micrófono** para transcripción.
-- GPU decente ayuda, pero el sistema intenta funcionar también en equipos modestos (a costa de latencia). :contentReference[oaicite:18]{index=18}
+- GPU decente ayuda, pero el sistema intenta funcionar también en equipos modestos (a costa de latencia). 
 
 ---
 
