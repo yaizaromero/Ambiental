@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
+// CORRECCIÓN: Importamos esto solo una vez aquí arriba
 import { extractTextFromPdfFile } from "./pdfText.js";
 
-export default function RagPanel() {
-  const workerRef = useRef(null);
-  const chatContainerRef = useRef(null);
+const styles = {
+    container: { padding: '20px', display: 'flex', flexDirection: 'column', height: '100%', color: '#e2e8f0', overflow: 'hidden' },
+    header: { color: '#e2e8f0', margin: '0 0 15px 0', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '1.2rem' },
+    uploadArea: { background: '#1e293b', border: '2px dashed #334155', borderRadius: '12px', padding: '20px', textAlign: 'center', cursor: 'pointer', marginBottom: '15px' },
+    chatContainer: { flex: 1, background: '#020617', borderRadius: '12px', border: '1px solid #334155', padding: '15px', overflowY: 'auto', marginBottom: '15px', display: 'flex', flexDirection: 'column', gap: '15px' },
+    messageUser: { alignSelf: 'flex-end', background: '#2563eb', color: 'white', padding: '10px 15px', borderRadius: '12px 12px 0 12px', maxWidth: '85%' },
+    messageBot: { alignSelf: 'flex-start', background: '#1e293b', color: '#e2e8f0', padding: '10px 15px', borderRadius: '12px 12px 12px 0', maxWidth: '85%', border: '1px solid #334155' },
+    inputGroup: { display: 'flex', gap: '10px' },
+    input: { flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #475569', background: '#1e293b', color: 'white', outline: 'none' },
+    button: { padding: '12px 20px', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' },
+    sourceCard: { fontSize: '0.8rem', marginTop: '8px', background: '#0f172a', padding: '8px', borderRadius: '6px', borderLeft: '2px solid #8b5cf6' }
+};
 
-  const [pdfName, setPdfName] = useState("");
-  const [status, setStatus] = useState("Esperando PDF...");
+export default function RagPanel({ onRagActivity }) { 
+  const workerRef = useRef(null);
+  const chatEndRef = useRef(null);
+
+  const [status, setStatus] = useState("Waiting for PDF...");
   const [isBusy, setIsBusy] = useState(false);
   const [progress, setProgress] = useState(0); 
   const [question, setQuestion] = useState("");
@@ -14,264 +27,128 @@ export default function RagPanel() {
   const [chatHistory, setChatHistory] = useState([]);
 
   useEffect(() => {
-    // Inicializar el Worker
-    workerRef.current = new Worker(new URL("./ragWorker.js", import.meta.url), {
-      type: "module",
-    });
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory]);
+
+  useEffect(() => {
+    // Asegúrate de que ragWorker.js está en la misma carpeta o la ruta es correcta
+    workerRef.current = new Worker(new URL("./ragWorker.js", import.meta.url), { type: "module" });
 
     workerRef.current.onmessage = (e) => {
       const { type, payload } = e.data;
 
-      if (type === "STATUS") {
-        setStatus(payload);
-        setIsBusy(true);
-      }
+      if (type === "STATUS") setStatus(payload);
       
-      // CASO 1: Descargando Modelos de Internet
       if (type === "download_progress") {
-         setStatus(`Descargando modelo: ${payload.model}...`);
-         setProgress(payload.percent);
-         setIsBusy(true);
-      }
-
-      // CASO 2: Procesando el PDF localmente
-      if (type === "index_progress") {
-         setStatus(`Analizando contenido del PDF...`);
+         setStatus(`Loading... ${payload.percent}%`);
          setProgress(payload.percent);
       }
 
-      if (type === "INDEX_DONE") {
-        setStatus(`✅ Listo. PDF indexado (${payload.chunksCount} fragmentos).`);
-        setProgress(100); 
-        setTimeout(() => setProgress(0), 1000); 
+      if (type === "INDEX_COMPLETE") {
+        setStatus("Ready.");
+        setIsBusy(false);
         setIsReady(true);
-        setIsBusy(false);
+        addMessage("system", "Indexed Document.");
       }
 
-      if (type === "QUERY_DONE") {
-        // AQUÍ RECIBIMOS LAS FUENTES (sources) DEL WORKER
-        setChatHistory((prev) => [
-          ...prev,
-          { 
-            type: "bot", 
-            text: payload.answer, 
-            sources: payload.sources // Guardamos las fuentes para mostrarlas
-          },
-        ]);
-        setStatus("✅ Esperando pregunta...");
+      if (type === "ANSWER_COMPLETE") {
         setIsBusy(false);
+        setStatus("Ready");
+        addMessage("bot", payload.answer, payload.sources);
+        if (onRagActivity) onRagActivity(false); 
       }
 
       if (type === "ERROR") {
-        setStatus("❌ Error: " + payload);
+        setStatus("Error");
         setIsBusy(false);
-        setProgress(0);
+        addMessage("system", "Error: " + payload);
+        if (onRagActivity) onRagActivity(false);
       }
     };
 
     return () => workerRef.current?.terminate();
-  }, []);
+  }, [onRagActivity]);
 
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [chatHistory]);
+  const addMessage = (role, text, sources = []) => {
+      setChatHistory(prev => [...prev, { role, text, sources }]);
+  };
 
-  async function handleFile(file) {
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
     if (!file) return;
-    setPdfName(file.name);
-    setIsReady(false);
-    setChatHistory([]); 
-    setStatus("Iniciando...");
-    setProgress(0);
-    setIsBusy(true);
 
+    setIsBusy(true);
+    setStatus("Reading PDF...");
+    setChatHistory([]); 
+    
     try {
-      const { text } = await extractTextFromPdfFile(file, { maxPages: 50 });
-      workerRef.current.postMessage({
-        type: "INDEX_TEXT",
-        payload: { text },
-      });
-    } catch (error) {
-      setStatus("Error leyendo PDF: " + error.message);
+      // CORRECCIÓN: Eliminamos la línea conflictiva "const { extractTextFromPdfFile } = await import..."
+      // Usamos directamente la función importada al principio del archivo.
+      const { text } = await extractTextFromPdfFile(file);
+      
+      setStatus("Indexing...");
+      workerRef.current.postMessage({ type: "INDEX_TEXT", payload: { text } });
+    } catch (err) {
+      console.error(err);
+      setStatus("Error PDF");
       setIsBusy(false);
     }
-  }
+  };
 
-  function onDrop(e) {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type === "application/pdf") handleFile(file);
-  }
-
-  function ask() {
-    if (!question.trim() || !isReady || isBusy) return;
-    setChatHistory((prev) => [...prev, { type: "user", text: question }]);
-    setStatus("🧠 Pensando respuesta...");
-    setIsBusy(true);
-    workerRef.current.postMessage({
-      type: "QUERY",
-      payload: { question },
-    });
+  const ask = () => {
+    if (!question.trim() || isBusy) return;
+    
+    const q = question;
     setQuestion("");
-  }
+    addMessage("user", q);
+    
+    setIsBusy(true);
+    setStatus("Releasing GPU..."); 
+    if (onRagActivity) onRagActivity(true);
 
-  const styles = {
-    container: {
-      background: "#1e1e1e",
-      color: "#e0e0e0",
-      padding: "20px",
-      borderRadius: "12px",
-      boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-      fontFamily: "'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-      maxWidth: "800px",
-      margin: "20px auto",
-      border: "1px solid #333",
-    },
-    header: {
-      margin: "0 0 20px 0",
-      fontSize: "1.5rem",
-      fontWeight: "600",
-      color: "#fff",
-      borderBottom: "1px solid #333",
-      paddingBottom: "10px",
-    },
-    dropZone: {
-      border: "2px dashed #444",
-      borderRadius: "8px",
-      padding: "20px",
-      textAlign: "center",
-      cursor: "pointer",
-      background: "#252526",
-      transition: "background 0.2s",
-      marginBottom: "15px",
-    },
-    statusBar: {
-      fontSize: "0.9rem",
-      color: isBusy ? "#4caf50" : "#aaa",
-      marginBottom: "5px",
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      height: "20px",
-    },
-    progressContainer: {
-        width: "100%",
-        height: "6px",
-        background: "#333",
-        borderRadius: "3px",
-        marginBottom: "15px",
-        overflow: "hidden",
-        display: progress > 0 ? "block" : "none"
-    },
-    progressFill: {
-        height: "100%",
-        width: `${progress}%`,
-        background: "#4caf50",
-        transition: "width 0.2s ease-in-out" 
-    },
-    chatWindow: {
-      height: "350px",
-      overflowY: "auto",
-      background: "#252526",
-      borderRadius: "8px",
-      padding: "15px",
-      border: "1px solid #333",
-      marginBottom: "15px",
-      display: chatHistory.length === 0 ? "none" : "block",
-    },
-    inputGroup: { display: "flex", gap: "10px" },
-    input: {
-      flex: 1,
-      padding: "12px",
-      borderRadius: "6px",
-      border: "1px solid #444",
-      background: "#333",
-      color: "white",
-      fontSize: "1rem",
-      outline: "none",
-    },
-    button: {
-      padding: "10px 25px",
-      background: isReady ? "#007acc" : "#444",
-      color: "white",
-      border: "none",
-      borderRadius: "6px",
-      fontWeight: "bold",
-      cursor: isReady ? "pointer" : "not-allowed",
-    },
-    msgRow: { marginBottom: "12px", lineHeight: "1.5", fontSize: "0.95rem" },
-    userLabel: { color: "#4fc1ff", fontWeight: "bold", marginRight: "8px" },
-    botLabel: { color: "#4ec9b0", fontWeight: "bold", marginRight: "8px" }
+    // DELAY DE SEGURIDAD (1.5s)
+    setTimeout(() => {
+        setStatus("Generating...");
+        workerRef.current.postMessage({ type: "ASK_QUESTION", payload: { question: q } });
+    }, 1500);
   };
 
   return (
     <div style={styles.container}>
-      <h3 style={styles.header}>RAG Local</h3>
+      <h2 style={styles.header}>
+        📄 Doc Chat <StatusBadge status={status} />
+      </h2>
 
-      <div
-        onDrop={onDrop}
-        onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.background = "#333"; }}
-        onDragLeave={(e) => { e.currentTarget.style.background = "#252526"; }}
-        style={styles.dropZone}
-      >
-        <div style={{ fontSize: "1.2rem", marginBottom: "5px" }}>{pdfName ? "📄" : "📂"}</div>
-        <div>{pdfName ? <span style={{color:"#fff", fontWeight:"bold"}}>{pdfName}</span> : "Arrastra tu PDF aquí"}</div>
-      </div>
-
-      <div style={styles.statusBar}>
-        <span>{isBusy && <span className="loader" style={{marginRight:8}}>⚡</span>} {status}</span>
-        {progress > 0 && <span style={{fontSize:"0.8em", color:"#888"}}>{progress}%</span>}
-      </div>
-      
-      <div style={styles.progressContainer}>
-          <div style={styles.progressFill}></div>
-      </div>
-
-      <div ref={chatContainerRef} style={styles.chatWindow}>
-        {chatHistory.map((msg, index) => (
-          <div key={index} style={styles.msgRow}>
-            {msg.type === "user" ? (
-                // MENSAJE USUARIO
-                <> <span style={styles.userLabel}>You:</span> <span>{msg.text}</span> </>
+      <div style={styles.uploadArea}>
+         <input type="file" accept="application/pdf" onChange={handleFileUpload} style={{ display: 'none' }} id="pdf-upload" />
+         <label htmlFor="pdf-upload" style={{ cursor: 'pointer', display: 'block' }}>
+            {isBusy && progress > 0 ? (
+                <div style={{ width: '100%', background: '#334155', height: '4px', borderRadius: '2px' }}>
+                    <div style={{ width: `${progress}%`, background: '#8b5cf6', height: '100%' }}></div>
+                </div>
             ) : (
-                // MENSAJE BOT
-                <div>
-                    <span style={styles.botLabel}>AI:</span> 
-                    <span>{msg.text}</span>
-                    
-                    {/* VISUALIZACIÓN DE FUENTES (CITATIONS) */}
-                    {msg.sources && msg.sources.length > 0 && (
-                        <details style={{ marginTop: "10px", fontSize: "0.85rem", color: "#aaa" }}>
-                            <summary style={{ cursor: "pointer", listStyle: "none", userSelect: "none" }}>
-                                🔍 Ver fuentes ({msg.sources.length})
-                            </summary>
-                            <div style={{ 
-                                paddingLeft: "10px", 
-                                borderLeft: "2px solid #444", 
-                                marginTop: "5px",
-                                display: "flex", 
-                                flexDirection: "column", 
-                                gap: "8px" 
-                            }}>
-                                {msg.sources.map((src, i) => (
-                                    <div key={i} style={{ background: "#2a2a2a", padding: "8px", borderRadius: "4px" }}>
-                                        <div style={{ fontWeight: "bold", color: "#4caf50", fontSize: "0.8em", marginBottom: "3px" }}>
-                                            Fuente {i + 1} • Similitud: {(src.score * 100).toFixed(1)}%
-                                        </div>
-                                        <div style={{ fontStyle: "italic", color: "#ccc", fontSize: "0.9em" }}>
-                                            "{src.text.substring(0, 150)}..." 
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </details>
-                    )}
+                <span>📂 {isReady ? "Change PDF" : "Upload PDF"}</span>
+            )}
+         </label>
+      </div>
+
+      <div style={styles.chatContainer}>
+        {chatHistory.map((msg, idx) => (
+          <div key={idx} style={msg.role === 'user' ? styles.messageUser : styles.messageBot}>
+            <div>{msg.text}</div>
+            {msg.sources?.length > 0 && (
+                <div style={{ marginTop: '10px', borderTop: '1px solid #334155', paddingTop: '5px' }}>
+                    {msg.sources.map((src, i) => (
+                        <div key={i} style={styles.sourceCard}>
+                            <div style={{ fontWeight: 'bold', color: '#a78bfa' }}>{(src.score * 100).toFixed(0)}% Relevancia</div>
+                            <div style={{ fontStyle: 'italic', color: '#cbd5e1' }}>"...{src.text.substring(0, 80)}..."</div>
+                        </div>
+                    ))}
                 </div>
             )}
           </div>
         ))}
+        <div ref={chatEndRef} />
       </div>
 
       <div style={styles.inputGroup}>
@@ -279,14 +156,20 @@ export default function RagPanel() {
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && ask()}
-          placeholder={isReady ? "Ask a question in English..." : "Esperando PDF..."}
-          style={styles.input}
+          placeholder={isReady ? "Question..." : "Upload PDF"}
+          style={{ ...styles.input, opacity: isReady ? 1 : 0.5 }}
           disabled={!isReady || isBusy}
         />
-        <button onClick={ask} disabled={!isReady || isBusy} style={styles.button}>
-          Preguntar
-        </button>
+        <button onClick={ask} disabled={!isReady || isBusy} style={{ ...styles.button, opacity: isReady ? 1 : 0.5 }}>Send</button>
       </div>
     </div>
   );
+}
+
+function StatusBadge({ status }) {
+    let color = "#94a3b8";
+    if (status.includes("Listo")) color = "#10b981";
+    if (status.includes("Cargando") || status.includes("Generando") || status.includes("Liberando") || status.includes("Leyendo")) color = "#8b5cf6";
+    if (status.includes("Error")) color = "#ef4444";
+    return <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', border: `1px solid ${color}`, color: color, marginLeft: 'auto' }}>{status}</span>;
 }

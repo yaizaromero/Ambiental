@@ -1,13 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mi-proyecto</title>
+
+    <title>Sistema inteligente de apoyo al brainstorming</title>
+    <meta
+      name="description"
+      content="Transcripción en vivo en el navegador con Whisper (Transformers.js) y Web Worker."
+    />
+
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
+
+    <style>
+      html, body { height: 100%; }
+      body { margin: 0; }
+    </style>
   </head>
+
   <body>
     <div id="root"></div>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

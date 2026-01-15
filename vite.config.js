@@ -10,7 +10,9 @@ export default defineConfig({
     target: 'esnext' // <--- AÑADE ESTO: Evita errores al construir la versión final
   },
   optimizeDeps: {
-    // Actualizamos el nombre por si acaso tienes instalada la librería local
-    exclude: ['@huggingface/transformers', '@xenova/transformers'], 
+    exclude: ['@xenova/transformers', 'onnxruntime-web'],
+  },
+  define: {
+    global: 'globalThis',
   },
 })

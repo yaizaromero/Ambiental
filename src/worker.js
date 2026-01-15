@@ -1,67 +1,100 @@
-// src/worker.js
-// Worker para la clasificación de texto (Intención de usuario / Sombreros)
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.0";
 
-// 1. CAMBIO IMPORTANTE: Usamos la CDN para que no busque en node_modules
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.1.0';
+const WHISPER_SAMPLING_RATE = 16000;
 
-// Configuración: No buscar modelos en disco local, usar caché del navegador
-env.allowLocalModels = false;
-env.useBrowserCache = true;
 
-// Singleton del modelo
-class OrquestadorPipeline {
-    static task = 'zero-shot-classification';
-    static model = 'Xenova/mobilebert-uncased-mnli'; 
-    static instance = null;
+let contextBuffer = "";
+const MAX_CONTEXT_CHARS = 300; 
 
-    static async getInstance(progress_callback = null) {
-        if (this.instance === null) {
-            this.instance = await pipeline(this.task, this.model, { progress_callback });
-        }
-        return this.instance;
-    }
+
+let asr = null;
+let processing = false;
+
+async function load() {
+  try {
+    self.postMessage({ status: "loading", data: "Loading model..." });
+
+    const deviceUse = ("gpu" in navigator) ? "webgpu" : "wasm";
+
+    asr = await pipeline(
+      "automatic-speech-recognition",
+      "onnx-community/whisper-small",
+      { device: deviceUse, dtype: "q4", }
+    );
+
+    self.postMessage({
+      status: "loading",
+      data: "Warming up model..."
+    });
+
+    const dummyAudio = new Float32Array(WHISPER_SAMPLING_RATE * 5);
+    await asr(dummyAudio);
+
+
+
+    self.postMessage({ status: "ready" });
+  } catch (err) {
+    self.postMessage({ status: "error", data: String(err?.stack || err) });
+  }
 }
 
-self.addEventListener('message', async (event) => {
-  const { text } = event.data;
-  if (!text) return;
+async function generate({ audio }) {
+  if (!asr) {
+    self.postMessage({ status: "error", data: "ASR not loaded yet" });
+    return;
+  }
+  if (processing) return;
+  processing = true;
 
   try {
-    // 1. Notificar carga
-    let classifier = await OrquestadorPipeline.getInstance((data) => {
-      if (data.status === 'progress') {
-        self.postMessage({ 
-          status: 'loading', 
-          output: { status: 'Cargando clasificador', progress: data.progress } 
-        });
+    self.postMessage({ status: "start" });
+
+    const out = await asr(audio, {
+      generate_kwargs: {
+        prompt: contextBuffer,
+      },
+    });
+
+    const text = out.text?.trim();
+
+    // actualizar buffer de contexto
+    if (text) {
+      contextBuffer += " " + text;
+
+      // limitar tamaño del contexto
+      if (contextBuffer.length > MAX_CONTEXT_CHARS) {
+        contextBuffer = contextBuffer.slice(-MAX_CONTEXT_CHARS);
       }
-    });
+    }
 
-    // 2. Definir las etiquetas (Intenciones)
-    // Las ponemos en inglés porque este modelo entiende mejor el inglés, 
-    // aunque clasifica texto en español perfectamente.
-    const candidate_labels = [
-      "critical risk problem",          // Sombrero Negro
-      "creative idea new alternative",  // Sombrero Verde
-      "objective fact data number",     // Sombrero Blanco
-      "emotion feeling intuition",      // Sombrero Rojo
-      "positive benefit advantage",     // Sombrero Amarillo
-      "process summary organization"    // Sombrero Azul
-    ];
-
-    // 3. Ejecutar clasificación
-    const output = await classifier(text, candidate_labels);
-
-    // 4. Devolver resultado
     self.postMessage({
-      status: 'complete',
-      result: output
-    });
+        status: "debug_context",
+        data: contextBuffer,
+        });
 
+
+    self.postMessage({
+      status: "complete",
+      output: text,
+    });
   } catch (err) {
-    self.postMessage({
-      status: 'error',
-      output: err.message
-    });
+    self.postMessage({ status: "error", data: String(err?.stack || err) });
+  } finally {
+    processing = false;
+  }
+}
+
+
+self.addEventListener("message", async (e) => {
+  const { type, data } = e.data || {};
+  switch (type) {
+    case "load":
+      await load();
+      break;
+    case "generate":
+      await generate(data);
+      break;
   }
 });
+
+self.postMessage({ status: "booted" });
