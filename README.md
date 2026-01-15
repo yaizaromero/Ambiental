@@ -1,16 +1,38 @@
-# React + Vite
+# Brainstorming Privado (Ambiental)
+**Sistema inteligente de apoyo al brainstorming con privacidad total (Local-First)**
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Este proyecto implementa una aplicación web **100% client-side** que asiste sesiones de brainstorming **sin enviar datos a la nube**: transcribe audio en tiempo real, ofrece intervención “agéntica” basada en **Seis Sombreros para Pensar**, analiza esquemas dibujados en un **canvas** y permite consultar **PDFs locales** mediante un pipeline **RAG** ejecutado en el navegador. :contentReference[oaicite:2]{index=2}
 
-Currently, two official plugins are available:
+> Objetivo principal: digitalizar y potenciar sesiones presenciales de ideación en entornos sensibles (I+D/estratégicos) garantizando que **ningún byte** salga del equipo del usuario. :contentReference[oaicite:3]{index=3}
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## Funcionalidades
+### 1) Transcripción privada (ASR)
+### 2) Razonamiento agéntico (Seis Sombreros)
+### 3) Multimodalidad (Canvas)
+### 4) Memoria contextual (RAG local sobre PDFs)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## Requisitos
+- **Node.js + npm** (recomendado Node 18+).
+- Navegador moderno:
+  - Ideal: Chrome/Edge con **WebGPU** habilitado.
+  - Alternativa: fallback a WASM/CPU (más lento).
+- Permiso de **micrófono** para transcripción.
+- GPU decente ayuda, pero el sistema intenta funcionar también en equipos modestos (a costa de latencia). :contentReference[oaicite:18]{index=18}
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+---
+
+## Instalación y ejecución
+```bash
+# 1) Clona el repositorio
+git clone https://github.com/yaizaromero/Ambiental.git
+cd Ambiental
+
+# 2) Instala dependencias
+npm install
+
+# 3) Modo desarrollo
+npm run dev
