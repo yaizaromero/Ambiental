@@ -8,10 +8,10 @@ Este proyecto implementa una aplicación web **100% client-side** que asiste ses
 ---
 
 ## Funcionalidades
-### 1) Transcripción privada (ASR)
-### 2) Razonamiento agéntico (Seis Sombreros)
-### 3) Multimodalidad (Canvas)
-### 4) Memoria contextual (RAG local sobre PDFs)
+ 1) Transcripción privada (ASR)
+ 2) Razonamiento agéntico (Seis Sombreros)
+ 3) Multimodalidad (Canvas)
+ 4) Memoria contextual (RAG local sobre PDFs)
 
 ---
 
